@@ -32,12 +32,12 @@ Before signing in, fill `.env.local` with the Firebase Web App values from your 
 
 ```mermaid
 flowchart LR
-  Browser[React application] --> Auth[Firebase Authentication]
-  Browser --> Local[UID-scoped localStorage cache]
-  Browser --> Firestore[(Cloud Firestore)]
-  Browser --> AppCheck[Optional Firebase App Check]
-  Firestore --> Rules[Firestore Security Rules]
-  Rules --> UserData[/users/{uid}/days and settings/]
+    Browser["Browser / React application"] --> Auth["Firebase Authentication"]
+    Browser --> Cache["Local UID-scoped localStorage cache"]
+    Browser --> Firestore["Cloud Firestore"]
+    Browser --> AppCheck["Optional Firebase App Check"]
+    Firestore --> Rules["Firestore Security Rules"]
+    Rules --> UserData["User data: /users/{uid}/days and /users/{uid}/settings"]
 ```
 
 The main state and view composition live in `src/App.tsx`. Firebase access and UID-scoped cache helpers live in `src/firebase.ts`. UI views are in `src/components/`, reusable Today sections are in `src/components/today/`, and input/backup helpers are in `src/utils/`. `firestore.rules` protects the `/users/{uid}/` data tree.
