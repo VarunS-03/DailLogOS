@@ -9,6 +9,9 @@ import {
   saveDayRecord,
   subscribeToDayRecord,
   loadAllDaysFromStorage,
+  loadUserSettings,
+  saveUserSettings,
+  clearUserLocalCache,
   deleteUserData,
   isFirebaseConfigured,
   AppAuthError,
@@ -81,6 +84,9 @@ export default function App() {
     try {
       await signOutUser(user ? user.uid : null);
       setUser(null);
+      setAllDays({});
+      setSettings(DEFAULT_SETTINGS);
+      setCurrentDay(createDefaultDayRecord(selectedDate, DEFAULT_SETTINGS));
     } catch (err) {
       console.warn('Sign-out error:', err);
     }
@@ -106,12 +112,6 @@ export default function App() {
 
   // Settings
   const [settings, setSettings] = useState<UserSettings>(() => {
-    try {
-      const stored = localStorage.getItem('daily_os_settings');
-      if (stored) return JSON.parse(stored);
-    } catch (e) {
-      // ignore
-    }
     return DEFAULT_SETTINGS;
   });
 
@@ -155,13 +155,35 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 2. Load all stored days on mount
+  // 2. Load only the authenticated user's stored days
   useEffect(() => {
-    const stored = loadAllDaysFromStorage();
+    const stored = user ? loadAllDaysFromStorage(user.uid) : {};
     setAllDays(stored);
-  }, []);
+  }, [user]);
 
-  // 3. Load or subscribe to day record when selectedDate or user changes
+  // 3. Load only the authenticated user's settings
+  useEffect(() => {
+    let isMounted = true;
+
+    if (!user) {
+      setSettings(DEFAULT_SETTINGS);
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    loadUserSettings(user.uid).then((stored) => {
+      if (isMounted && stored) {
+        setSettings(stored);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user]);
+
+  // 4. Load or subscribe to day record when selectedDate or user changes
   useEffect(() => {
     let isMounted = true;
     isInitialLoadRef.current = true;
@@ -209,7 +231,7 @@ export default function App() {
     };
   }, [selectedDate, user]);
 
-  // 4. Save updates to Day Record with debounce (Single Source of Truth)
+  // 5. Save updates to Day Record with debounce (Single Source of Truth)
   const handleUpdateDay = useCallback(
     (updatedDay: DayRecord) => {
       const dayWithScore = {
@@ -242,7 +264,7 @@ export default function App() {
     [user]
   );
 
-  // 5. Switch Date (Preserves active tab or routes as directed)
+  // 6. Switch Date (Preserves active tab or routes as directed)
   const handleDateChange = (newDateStr: string, targetTab?: TabType) => {
     setSelectedDate(newDateStr);
     if (targetTab) {
@@ -250,13 +272,15 @@ export default function App() {
     }
   };
 
-  // 6. Settings updates
+  // 7. Settings updates
   const handleUpdateSettings = (newSettings: UserSettings) => {
     setSettings(newSettings);
-    localStorage.setItem('daily_os_settings', JSON.stringify(newSettings));
+    if (user) {
+      void saveUserSettings(user.uid, newSettings);
+    }
   };
 
-  // 7. Backup Import
+  // 8. Backup Import
   const handleImportBackup = (importedDays: Record<string, DayRecord>, importedSettings?: UserSettings) => {
     setAllDays(importedDays);
     Object.values(importedDays).forEach((day) => {
@@ -270,12 +294,13 @@ export default function App() {
     }
   };
 
-  // 8. Delete Account
+  // 9. Delete Account
   const handleDeleteAccount = async () => {
     if (user) {
-      await deleteUserData(user.uid);
+      const uid = user.uid;
+      await deleteUserData(uid);
+      clearUserLocalCache(uid);
     }
-    localStorage.clear();
     setAllDays({});
     const todayStr = new Date().toISOString().split('T')[0];
     const freshDay = createDefaultDayRecord(todayStr, DEFAULT_SETTINGS);

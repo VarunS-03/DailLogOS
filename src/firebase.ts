@@ -605,15 +605,15 @@ export function getAllUserCachedDays(uid: string): Record<string, DayRecord> {
 
 export function clearUserLocalCache(uid: string): void {
   const prefix = `daily_os_day_${uid}_`;
+  const settingsKey = `daily_os_settings_${uid}`;
   const keysToRemove: string[] = [];
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
-    if (key && (key.startsWith(prefix) || key.includes(uid))) {
+    if (key && (key.startsWith(prefix) || key === settingsKey)) {
       keysToRemove.push(key);
     }
   }
   keysToRemove.forEach((k) => localStorage.removeItem(k));
-  localStorage.removeItem(`daily_os_settings_${uid}`);
 }
 
 /**
@@ -621,25 +621,5 @@ export function clearUserLocalCache(uid: string): void {
  * If a user id is specified, reads from that user's isolated cache prefix.
  */
 export function loadAllDaysFromStorage(uid?: string | null): Record<string, DayRecord> {
-  if (uid) {
-    return getAllUserCachedDays(uid);
-  }
-  const result: Record<string, DayRecord> = {};
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key && key.startsWith('daily_os_day_')) {
-      try {
-        const val = localStorage.getItem(key);
-        if (val) {
-          const record = JSON.parse(val) as DayRecord;
-          if (record && record.date) {
-            result[record.date] = record;
-          }
-        }
-      } catch {
-        // ignore malformed entries
-      }
-    }
-  }
-  return result;
+  return uid ? getAllUserCachedDays(uid) : {};
 }
