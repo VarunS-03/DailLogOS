@@ -1,0 +1,70 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile document",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 256 },
+        "displayName": { "type": "string", "maxLength": 128 },
+        "photoURL": { "type": "string", "maxLength": 1024 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["uid"]
+    },
+    "UserSettings": {
+      "title": "UserSettings",
+      "description": "User preferences, routines and rotation configuration",
+      "type": "object",
+      "properties": {
+        "defaultWorkoutMode": { "type": "string", "enum": ["gym", "home"] },
+        "theme": { "type": "string", "enum": ["dark", "light"] },
+        "academicSchedule": { "type": "object" },
+        "notificationsEnabled": { "type": "boolean" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      }
+    },
+    "DayRecord": {
+      "title": "DayRecord",
+      "description": "Comprehensive daily tracking record for a single date",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "maxLength": 10 },
+        "dayOfWeek": { "type": "string", "maxLength": 20 },
+        "completionPercentage": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 5000 },
+        "mood": { "type": "number" },
+        "energy": { "type": "number" },
+        "sleep": { "type": "number" },
+        "dailyReflection": { "type": "object" },
+        "tomorrowFirstAction": { "type": "string", "maxLength": 1000 },
+        "schedule": { "type": "array" },
+        "habits": { "type": "array" },
+        "academics": { "type": "object" },
+        "dsa": { "type": "array" },
+        "workout": { "type": "object" },
+        "project": { "type": "object" },
+        "skills": { "type": "object" },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["date"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": "User",
+      "description": "User profile root document. Read and write restricted strictly to document owner."
+    },
+    "/users/{uid}/settings/{settingId}": {
+      "schema": "UserSettings",
+      "description": "User preferences and schedule configurations. Restricted to document owner."
+    },
+    "/users/{uid}/days/{dateId}": {
+      "schema": "DayRecord",
+      "description": "Daily tracking record strictly keyed by ISO date YYYY-MM-DD. Restricted to document owner."
+    }
+  }
+}

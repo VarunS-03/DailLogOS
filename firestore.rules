@@ -1,0 +1,109 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // GLOBAL DENY-BY-DEFAULT
+    // =========================================================================
+    // Explicitly reject any access to unknown collections or unspecified paths.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // AUTHENTICATION & AUTHORIZATION HELPERS
+    // =========================================================================
+    function isSignedIn() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Validates strict ISO 8601 calendar date format (YYYY-MM-DD)
+    function isValidDateId(dateId) {
+      return dateId is string &&
+             dateId.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    // =========================================================================
+    // SCHEMA & INVARIANT VALIDATORS
+    // =========================================================================
+
+    // User Profile Validator (/users/{uid})
+    function isValidUserProfile(data, uid) {
+      return (!('uid' in data) || data.uid == uid) &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 256)) &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 128)) &&
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 1024));
+    }
+
+    // User Settings Validator (/users/{uid}/settings/{settingId})
+    function isValidUserSettings(data) {
+      return (!('defaultWorkoutMode' in data) || data.defaultWorkoutMode in ['gym', 'home']) &&
+             (!('theme' in data) || data.theme in ['dark', 'light']) &&
+             (!('academicSchedule' in data) || data.academicSchedule is map) &&
+             (!('notificationsEnabled' in data) || data.notificationsEnabled is bool);
+    }
+
+    // Daily Record Validator (/users/{uid}/days/{dateId})
+    function isValidDayRecord(data, dateId) {
+      return // Document Date must match the path ID to prevent ID spoofing / corruption
+             data.date is string &&
+             data.date == dateId &&
+             data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+
+             // Numeric bounds (1-5 for subjective scores, 0-100 for completion percentage)
+             (!('mood' in data) || (data.mood is number && data.mood >= 1 && data.mood <= 5)) &&
+             (!('energy' in data) || (data.energy is number && data.energy >= 1 && data.energy <= 5)) &&
+             (!('sleep' in data) || (data.sleep is number && data.sleep >= 1 && data.sleep <= 5)) &&
+             (!('completionPercentage' in data) || (data.completionPercentage is number && data.completionPercentage >= 0 && data.completionPercentage <= 100)) &&
+
+             // Volumetric bounds on top-level strings to prevent document inflation
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 5000)) &&
+             (!('tomorrowFirstAction' in data) || (data.tomorrowFirstAction is string && data.tomorrowFirstAction.size() <= 1000)) &&
+             (!('dayOfWeek' in data) || (data.dayOfWeek is string && data.dayOfWeek.size() <= 20)) &&
+
+             // Array collection bounds (capped to 50 entries each)
+             (!('schedule' in data) || (data.schedule is list && data.schedule.size() <= 50)) &&
+             (!('habits' in data) || (data.habits is list && data.habits.size() <= 50)) &&
+             (!('dsa' in data) || (data.dsa is list && data.dsa.size() <= 50)) &&
+
+             // Structural object blocks
+             (!('academics' in data) || data.academics is map) &&
+             (!('dailyReflection' in data) || data.dailyReflection is map) &&
+             (!('workout' in data) || data.workout is map) &&
+             (!('project' in data) || data.project is map) &&
+             (!('skills' in data) || data.skills is map);
+    }
+
+    // =========================================================================
+    // USER DATA SPACE: /users/{uid}
+    // =========================================================================
+    match /users/{uid} {
+      // User Profile root document
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) && isValidUserProfile(request.resource.data, uid);
+      allow update: if isOwner(uid) && isValidUserProfile(request.resource.data, uid);
+      allow delete: if isOwner(uid);
+
+      // User Settings Subcollection (/users/{uid}/settings/{settingId})
+      match /settings/{settingId} {
+        allow read: if isOwner(uid);
+        allow create: if isOwner(uid) && (settingId == 'main') && isValidUserSettings(request.resource.data);
+        allow update: if isOwner(uid) && (settingId == 'main') && isValidUserSettings(request.resource.data);
+        allow delete: if isOwner(uid);
+      }
+
+      // User Daily Records Subcollection (/users/{uid}/days/{dateId})
+      match /days/{dateId} {
+        allow read: if isOwner(uid) && isValidDateId(dateId);
+        allow create: if isOwner(uid) && isValidDateId(dateId) && isValidDayRecord(request.resource.data, dateId);
+        allow update: if isOwner(uid) && isValidDateId(dateId) && isValidDayRecord(request.resource.data, dateId);
+        allow delete: if isOwner(uid) && isValidDateId(dateId);
+      }
+    }
+  }
+}

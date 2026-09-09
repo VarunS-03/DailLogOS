@@ -1,0 +1,6 @@
+{
+  "name": "DAILY OS",
+  "description": "A personal, private, responsive daily-life tracker inspired by Notion.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
