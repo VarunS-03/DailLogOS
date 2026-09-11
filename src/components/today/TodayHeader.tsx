@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, Sparkles } from 'lucide-react';
 import { DayRecord } from '../../types';
+import { addDaysToDateId, getLocalDateId } from '../../utils/localDate';
 
 interface TodayHeaderProps {
   day: DayRecord;
@@ -30,15 +31,11 @@ export const TodayHeader: React.FC<TodayHeaderProps> = ({ day, onDateChange }) =
   };
 
   const changeDayBy = (offset: number) => {
-    const [y, m, d] = day.date.split('-').map(Number);
-    const date = new Date(y, m - 1, d);
-    date.setDate(date.getDate() + offset);
-    const newDateStr = date.toISOString().split('T')[0];
-    onDateChange(newDateStr);
+    onDateChange(addDaysToDateId(day.date, offset));
   };
 
   const isToday = () => {
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = getLocalDateId();
     return day.date === todayStr;
   };
 
@@ -93,7 +90,7 @@ export const TodayHeader: React.FC<TodayHeaderProps> = ({ day, onDateChange }) =
             {!isToday() && (
               <button
                 id="btn-jump-today"
-                onClick={() => onDateChange(new Date().toISOString().split('T')[0])}
+                onClick={() => onDateChange(getLocalDateId())}
                 className="px-2.5 py-1 text-xs font-medium text-zinc-200 hover:bg-[#1c2230] rounded transition-colors"
               >
                 Today

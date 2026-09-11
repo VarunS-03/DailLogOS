@@ -109,10 +109,7 @@ export const DailyReviewSection: React.FC<DailyReviewSectionProps> = ({
         <input
           type="text"
           value={tomorrowFirstAction}
-          onChange={(e) => {
-            onUpdateStats({ tomorrowFirstAction: e.target.value });
-            handleReflectionChange('tomorrowFirstAction', e.target.value);
-          }}
+          onChange={(e) => onUpdateStats({ tomorrowFirstAction: e.target.value })}
           placeholder="e.g. Open LeetCode 33, implement binary search rotated array template directly without looking up hints."
           className="w-full px-3 py-2 bg-[#0e1118] border border-[#232938] rounded-md text-xs text-zinc-100 placeholder-zinc-500 focus:outline-hidden focus:border-zinc-400 font-medium"
         />

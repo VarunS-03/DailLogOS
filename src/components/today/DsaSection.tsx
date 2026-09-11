@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Code2, Plus, Check, ChevronDown, ChevronUp, Trash2, Tag } from 'lucide-react';
 import { DsaProblem } from '../../types';
 import { DSA_TAGS } from '../../constants/templates';
+import { getLocalDateId } from '../../utils/localDate';
 
 interface DsaSectionProps {
   problems: DsaProblem[];
@@ -57,7 +58,7 @@ export const DsaSection: React.FC<DsaSectionProps> = ({
       timeComplexity: timeComplexity.trim() || 'O(N)',
       spaceComplexity: spaceComplexity.trim() || 'O(1)',
       reimplemented,
-      reviewDate: reviewDate || new Date(Date.now() + 3 * 86400000).toISOString().split('T')[0],
+      reviewDate: reviewDate || getLocalDateId(new Date(Date.now() + 3 * 86400000)),
       tags: selectedTags,
     };
 

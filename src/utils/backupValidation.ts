@@ -1,4 +1,15 @@
-import { DayRecord, UserSettings } from '../types';
+import {
+  BEHAVIORAL_LIMITS,
+  BehavioralReview,
+  CreditEvent,
+  DayRecord,
+  DayStart,
+  FocusSession,
+  Outcome,
+  RecoveryDecision,
+  TomorrowHandoff,
+  UserSettings,
+} from '../types';
 
 export interface ValidationResult {
   valid: boolean;
@@ -13,6 +24,53 @@ export interface ValidationResult {
 }
 
 const ISO_DATE_REGEX = /^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$/;
+const BEHAVIORAL_ID_REGEX = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const OUTCOME_STATUSES = ['planned', 'active', 'completed', 'partial', 'blocked', 'missed', 'abandoned', 'dropped'];
+const FOCUS_SESSION_STATUSES = ['active', 'completed', 'partial', 'blocked', 'abandoned'];
+const RECOVERY_TYPES = ['rescue', 'reschedule', 'reduce', 'drop', 'blocked'];
+const FAILURE_REASONS = ['underestimated_difficulty', 'avoidance', 'poor_planning', 'interruption', 'low_energy', 'unclear_next_action', 'dependency_blocker', 'overcommitment', 'unexpected_work'];
+const CREDIT_TYPES = ['output', 'partial_output', 'recovery', 'workout', 'review', 'milestone'];
+const BEHAVIORAL_DOMAINS = ['academics', 'dsa', 'project', 'workout', 'habits', 'schedule', 'other'];
+const OUTCOME_SOURCES = ['handoff', 'schedule', 'domain', 'user'];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isValidBehavioralId(value: unknown): value is string {
+  return typeof value === 'string' && BEHAVIORAL_ID_REGEX.test(value);
+}
+
+function isShortString(value: unknown, maxLength: number, required = false): value is string {
+  return typeof value === 'string' && value.length <= maxLength && (!required || value.trim().length > 0);
+}
+
+function isTimestamp(value: unknown, required = true): value is string {
+  return isShortString(value, 64, required);
+}
+
+function validateBehavioralFields(rawDay: Record<string, unknown>): string | undefined {
+  if (rawDay.schemaVersion !== undefined && (!Number.isInteger(rawDay.schemaVersion) || (rawDay.schemaVersion as number) < 0 || (rawDay.schemaVersion as number) > 100)) return 'schemaVersion is invalid.';
+  if (rawDay.dayStart !== undefined) {
+    const value = rawDay.dayStart;
+    if (!isRecord(value) || !ISO_DATE_REGEX.test(String(value.date)) || !isTimestamp(value.startedAt) || !isTimestamp(value.acceptedAt) || !['normal', 'reduced', 'minimum'].includes(String(value.capacityMode)) || !isShortString(value.firstAction, 1000, true) || (value.implementationIntention !== undefined && !isShortString(value.implementationIntention, 1000))) return 'dayStart is invalid.';
+  }
+  const arrays: Array<[keyof typeof BEHAVIORAL_LIMITS, unknown]> = [['outcomes', rawDay.outcomes], ['focusSessions', rawDay.focusSessions], ['recoveryDecisions', rawDay.recoveryDecisions], ['creditEvents', rawDay.creditEvents]];
+  for (const [key, value] of arrays) if (value !== undefined && (!Array.isArray(value) || value.length > BEHAVIORAL_LIMITS[key])) return `${key} exceeds its safe limit.`;
+  if (Array.isArray(rawDay.outcomes) && rawDay.outcomes.some((v) => !isRecord(v) || !isValidBehavioralId(v.id) || !BEHAVIORAL_DOMAINS.includes(String(v.domain)) || !isShortString(v.title, 500, true) || !isShortString(v.minimumOutput, 2000, true) || !Number.isInteger(v.priority) || (v.priority as number) < 1 || (v.priority as number) > 3 || !OUTCOME_STATUSES.includes(String(v.status)) || !OUTCOME_SOURCES.includes(String(v.source)) || !isTimestamp(v.createdAt) || (v.resolvedAt !== undefined && !isTimestamp(v.resolvedAt)) || (v.replacementReason !== undefined && !isShortString(v.replacementReason, 1000)))) return 'outcomes contains an invalid entry.';
+  if (Array.isArray(rawDay.focusSessions) && rawDay.focusSessions.some((v) => !isRecord(v) || !isValidBehavioralId(v.id) || !isShortString(v.objective, 1000, true) || !isShortString(v.minimumOutput, 2000, true) || (v.intendedMinutes !== undefined && (!Number.isInteger(v.intendedMinutes) || (v.intendedMinutes as number) < 1 || (v.intendedMinutes as number) > 720)) || !isTimestamp(v.startedAt) || (v.endedAt !== undefined && !isTimestamp(v.endedAt)) || !FOCUS_SESSION_STATUSES.includes(String(v.status)) || (v.output !== undefined && !isShortString(v.output, 5000)))) return 'focusSessions contains an invalid entry.';
+  if (Array.isArray(rawDay.recoveryDecisions) && rawDay.recoveryDecisions.some((v) => !isRecord(v) || !isValidBehavioralId(v.id) || !RECOVERY_TYPES.includes(String(v.type)) || !isShortString(v.reason, 1000, true) || !isTimestamp(v.createdAt) || (v.newScope !== undefined && !isShortString(v.newScope, 2000)) || (v.nextAction !== undefined && !isShortString(v.nextAction, 1000)))) return 'recoveryDecisions contains an invalid entry.';
+  if (rawDay.behavioralReview !== undefined) {
+    const value = rawDay.behavioralReview;
+    if (!isRecord(value) || !isShortString(value.movedForward, 2000) || !Array.isArray(value.failureReasons) || value.failureReasons.length > 10 || value.failureReasons.some((reason) => !FAILURE_REASONS.includes(String(reason))) || !isShortString(value.adjustment, 2000) || typeof value.reviewComplete !== 'boolean' || (value.completedAt !== undefined && !isTimestamp(value.completedAt))) return 'behavioralReview is invalid.';
+  }
+  if (rawDay.tomorrowHandoff !== undefined) {
+    const value = rawDay.tomorrowHandoff;
+    if (!isRecord(value) || !isTimestamp(value.createdAt) || !isShortString(value.firstAction, 1000, true) || (value.carryForwardOutcomeId !== undefined && !isValidBehavioralId(value.carryForwardOutcomeId)) || (value.blockerAction !== undefined && !isShortString(value.blockerAction, 1000)) || (value.dueReviewReference !== undefined && !isShortString(value.dueReviewReference, 500)) || (value.adjustment !== undefined && !isShortString(value.adjustment, 2000)) || (value.note !== undefined && !isShortString(value.note, 2000))) return 'tomorrowHandoff is invalid.';
+  }
+  if (Array.isArray(rawDay.creditEvents) && rawDay.creditEvents.some((v) => !isRecord(v) || !isValidBehavioralId(v.id) || !CREDIT_TYPES.includes(String(v.type)) || !isTimestamp(v.createdAt) || (v.sourceId !== undefined && !isValidBehavioralId(v.sourceId)) || (v.note !== undefined && !isShortString(v.note, 1000)))) return 'creditEvents contains an invalid entry.';
+  return undefined;
+}
 
 /**
  * Strips dangerous HTML/script tags from user input to prevent XSS payloads.
@@ -83,10 +141,16 @@ export function validateAndSanitizeBackup(rawContent: string): ValidationResult 
       continue; // skip invalid day entry
     }
 
+    const behavioralError = validateBehavioralFields(rawDay as Record<string, unknown>);
+    if (behavioralError) {
+      return { valid: false, error: `Invalid Behavioral Core data for ${dateKey}: ${behavioralError}` };
+    }
+
     sortedKeys.push(dateKey);
 
     // Sanitize Day Record
     const dayRecord: DayRecord = {
+      schemaVersion: typeof rawDay.schemaVersion === 'number' ? rawDay.schemaVersion : 0,
       date: dateKey,
       dayOfWeek: sanitizeString(rawDay.dayOfWeek, 20) || 'Unknown',
       completionPercentage: sanitizeNumber(rawDay.completionPercentage, 0, 100, 0),
@@ -94,7 +158,7 @@ export function validateAndSanitizeBackup(rawContent: string): ValidationResult 
       mood: sanitizeNumber(rawDay.mood, 1, 5, 3),
       energy: sanitizeNumber(rawDay.energy, 1, 5, 3),
       sleep: sanitizeNumber(rawDay.sleep, 1, 5, 3),
-      tomorrowFirstAction: sanitizeString(rawDay.tomorrowFirstAction, 1000),
+      tomorrowFirstAction: sanitizeString(rawDay.tomorrowFirstAction, 1000) || sanitizeString(rawDay.dailyReflection?.tomorrowFirstAction, 1000),
       createdAt: typeof rawDay.createdAt === 'string' ? rawDay.createdAt.slice(0, 64) : new Date().toISOString(),
       updatedAt: typeof rawDay.updatedAt === 'string' ? rawDay.updatedAt.slice(0, 64) : new Date().toISOString(),
 
@@ -221,6 +285,13 @@ export function validateAndSanitizeBackup(rawContent: string): ValidationResult 
         focus: sanitizeString(rawDay.skills?.focus, 2000),
         notes: sanitizeString(rawDay.skills?.notes, 5000),
       },
+      dayStart: rawDay.dayStart as DayStart | undefined,
+      outcomes: rawDay.outcomes as Outcome[] | undefined,
+      focusSessions: rawDay.focusSessions as FocusSession[] | undefined,
+      recoveryDecisions: rawDay.recoveryDecisions as RecoveryDecision[] | undefined,
+      behavioralReview: rawDay.behavioralReview as BehavioralReview | undefined,
+      tomorrowHandoff: rawDay.tomorrowHandoff as TomorrowHandoff | undefined,
+      creditEvents: rawDay.creditEvents as CreditEvent[] | undefined,
     };
 
     sanitizedDays[dateKey] = dayRecord;

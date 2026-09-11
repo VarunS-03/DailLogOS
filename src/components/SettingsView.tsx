@@ -20,6 +20,7 @@ import { AuthErrorInfo, AuthUser, UserSettings, DayRecord } from '../types';
 import { DAYS_OF_WEEK } from '../constants/templates';
 import { isFirebaseConfigured, getFirebaseAuthDiagnostics } from '../firebase';
 import { validateAndSanitizeBackup, ValidationResult } from '../utils/backupValidation';
+import { getLocalDateId } from '../utils/localDate';
 
 interface SettingsViewProps {
   user: AuthUser | null;
@@ -87,7 +88,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     downloadAnchor.setAttribute('href', dataStr);
     downloadAnchor.setAttribute(
       'download',
-      `daily-os-private-backup-${new Date().toISOString().split('T')[0]}.json`
+      `daily-os-private-backup-${getLocalDateId()}.json`
     );
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();

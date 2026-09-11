@@ -48,6 +48,39 @@ service cloud.firestore {
              (!('notificationsEnabled' in data) || data.notificationsEnabled is bool);
     }
 
+    // Behavioral Core fields remain embedded in the day document. Lists are
+    // bounded here; detailed element validation is performed by the client
+    // import validator because Firestore Rules cannot iterate arbitrary lists.
+    function isValidDayStart(value) {
+      return value is map &&
+             value.date is string && value.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+             value.startedAt is string && value.startedAt.size() <= 64 &&
+             value.acceptedAt is string && value.acceptedAt.size() <= 64 &&
+             value.capacityMode in ['normal', 'reduced', 'minimum'] &&
+             value.firstAction is string && value.firstAction.size() > 0 && value.firstAction.size() <= 1000 &&
+             (!('implementationIntention' in value) || (value.implementationIntention is string && value.implementationIntention.size() <= 1000));
+    }
+
+    function isValidBehavioralReview(value) {
+      return value is map &&
+             value.movedForward is string && value.movedForward.size() <= 2000 &&
+             value.failureReasons is list && value.failureReasons.size() <= 10 &&
+             value.adjustment is string && value.adjustment.size() <= 2000 &&
+             value.reviewComplete is bool &&
+             (!('completedAt' in value) || (value.completedAt is string && value.completedAt.size() <= 64));
+    }
+
+    function isValidTomorrowHandoff(value) {
+      return value is map &&
+             value.createdAt is string && value.createdAt.size() <= 64 &&
+             value.firstAction is string && value.firstAction.size() > 0 && value.firstAction.size() <= 1000 &&
+             (!('carryForwardOutcomeId' in value) || (value.carryForwardOutcomeId is string && value.carryForwardOutcomeId.size() <= 64)) &&
+             (!('blockerAction' in value) || (value.blockerAction is string && value.blockerAction.size() <= 1000)) &&
+             (!('dueReviewReference' in value) || (value.dueReviewReference is string && value.dueReviewReference.size() <= 500)) &&
+             (!('adjustment' in value) || (value.adjustment is string && value.adjustment.size() <= 2000)) &&
+             (!('note' in value) || (value.note is string && value.note.size() <= 2000));
+    }
+
     // Daily Record Validator (/users/{uid}/days/{dateId})
     function isValidDayRecord(data, dateId) {
       return // Document Date must match the path ID to prevent ID spoofing / corruption
@@ -76,7 +109,17 @@ service cloud.firestore {
              (!('dailyReflection' in data) || data.dailyReflection is map) &&
              (!('workout' in data) || data.workout is map) &&
              (!('project' in data) || data.project is map) &&
-             (!('skills' in data) || data.skills is map);
+             (!('skills' in data) || data.skills is map) &&
+             // Versioned, bounded Behavioral Core contracts.
+             (!('schemaVersion' in data) || (data.schemaVersion is int && data.schemaVersion >= 0 && data.schemaVersion <= 100)) &&
+             (!('dayStart' in data) || isValidDayStart(data.dayStart)) &&
+             (!('outcomes' in data) || (data.outcomes is list && data.outcomes.size() <= 10)) &&
+             (!('focusSessions' in data) || (data.focusSessions is list && data.focusSessions.size() <= 20)) &&
+             (!('recoveryDecisions' in data) || (data.recoveryDecisions is list && data.recoveryDecisions.size() <= 20)) &&
+             (!('creditEvents' in data) || (data.creditEvents is list && data.creditEvents.size() <= 20)) &&
+             (!('behavioralReview' in data) || isValidBehavioralReview(data.behavioralReview)) &&
+             (!('tomorrowHandoff' in data) || isValidTomorrowHandoff(data.tomorrowHandoff));
+
     }
 
     // =========================================================================

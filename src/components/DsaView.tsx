@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { DayRecord, DsaProblem } from '../types';
 import { DSA_TAGS } from '../constants/templates';
+import { getLocalDateId } from '../utils/localDate';
 
 interface DsaViewProps {
   day: DayRecord;
@@ -77,7 +78,7 @@ export const DsaView: React.FC<DsaViewProps> = ({
       timeComplexity: timeComplexity.trim() || 'O(N)',
       spaceComplexity: spaceComplexity.trim() || 'O(1)',
       reimplemented,
-      reviewDate: reviewDate || new Date(Date.now() + 3 * 86400000).toISOString().split('T')[0],
+      reviewDate: reviewDate || getLocalDateId(new Date(Date.now() + 3 * 86400000)),
       tags: selectedTags,
     };
 

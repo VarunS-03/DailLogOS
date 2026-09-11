@@ -5,6 +5,7 @@
       "description": "User profile document",
       "type": "object",
       "properties": {
+        "schemaVersion": { "type": "number" },
         "uid": { "type": "string", "maxLength": 128 },
         "email": { "type": "string", "maxLength": 256 },
         "displayName": { "type": "string", "maxLength": 128 },
@@ -47,6 +48,13 @@
         "workout": { "type": "object" },
         "project": { "type": "object" },
         "skills": { "type": "object" },
+        "dayStart": { "type": "object" },
+        "outcomes": { "type": "array", "maxItems": 10 },
+        "focusSessions": { "type": "array", "maxItems": 20 },
+        "recoveryDecisions": { "type": "array", "maxItems": 20 },
+        "behavioralReview": { "type": "object" },
+        "tomorrowHandoff": { "type": "object" },
+        "creditEvents": { "type": "array", "maxItems": 20 },
         "createdAt": { "type": "string", "maxLength": 64 },
         "updatedAt": { "type": "string", "maxLength": 64 }
       },

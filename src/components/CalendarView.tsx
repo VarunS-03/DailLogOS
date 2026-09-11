@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, CheckCircle2 } from 'lucide-react';
 import { DayRecord } from '../types';
+import { getLocalDateId } from '../utils/localDate';
 
 interface CalendarViewProps {
   allDays: Record<string, DayRecord>;
@@ -29,7 +30,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ allDays, onSelectDat
     setCurrentDate(new Date(year, month + 1, 1));
   };
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getLocalDateId();
 
   // Calendar cells
   const daysCells: (number | null)[] = [];

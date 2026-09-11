@@ -1,6 +1,7 @@
 import React from 'react';
 import { ChevronLeft, ChevronRight, LayoutDashboard, Calendar, Clock } from 'lucide-react';
 import { TabType, SyncStatus } from '../types';
+import { addDaysToDateId, getLocalDateId } from '../utils/localDate';
 
 interface DateContextBarProps {
   selectedDate: string;
@@ -21,15 +22,11 @@ export const DateContextBar: React.FC<DateContextBarProps> = ({
   onDateChange,
   onNavigateTab,
 }) => {
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getLocalDateId();
   const isActualToday = selectedDate === todayStr;
 
   const changeDayBy = (offset: number) => {
-    const [y, m, d] = selectedDate.split('-').map(Number);
-    const date = new Date(y, m - 1, d);
-    date.setDate(date.getDate() + offset);
-    const newDateStr = date.toISOString().split('T')[0];
-    onDateChange(newDateStr);
+    onDateChange(addDaysToDateId(selectedDate, offset));
   };
 
   const [y, m, d] = selectedDate.split('-').map(Number);

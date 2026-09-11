@@ -31,10 +31,12 @@ import {
   renderAsciiBar,
   getTabForScheduleItem,
 } from '../utils/scheduleTime';
+import { addDaysToDateId, getLocalDateId } from '../utils/localDate';
+import { BehavioralCommandCenter } from './today/BehavioralCommandCenter';
 
 interface TodayDashboardProps {
   day: DayRecord;
-  onUpdateDay: (updatedDay: DayRecord) => void;
+  onUpdateDay: (updatedDay: DayRecord) => Promise<void>;
   onDateChange: (dateStr: string) => void;
   onNavigateTab: (tab: TabType) => void;
 }
@@ -134,24 +136,16 @@ export const TodayDashboard: React.FC<TodayDashboardProps> = ({
     e.preventDefault();
     handleSubUpdate({
       tomorrowFirstAction: tomorrowActionInput.trim(),
-      dailyReflection: {
-        ...day.dailyReflection,
-        tomorrowFirstAction: tomorrowActionInput.trim(),
-      },
     });
     setShowTomorrowInput(false);
   };
 
   // Prev / Next day navigation
   const changeDayBy = (offset: number) => {
-    const [y, m, d] = day.date.split('-').map(Number);
-    const date = new Date(y, m - 1, d);
-    date.setDate(date.getDate() + offset);
-    const newDateStr = date.toISOString().split('T')[0];
-    onDateChange(newDateStr);
+    onDateChange(addDaysToDateId(day.date, offset));
   };
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getLocalDateId();
   const isActualToday = day.date === todayStr;
 
   // Format header title: e.g. "TODAY — Tuesday, Sep 3"
@@ -188,8 +182,8 @@ export const TodayDashboard: React.FC<TodayDashboardProps> = ({
     const title = block.title.toLowerCase();
 
     if (cat === 'dsa' || title.includes('dsa') || title.includes('leetcode')) {
-      if (day.dsa && day.dsa.length > 0 && day.dsa[0].title) {
-        return day.dsa[0].title;
+      if (day.dsa && day.dsa.length > 0 && day.dsa[0].problem) {
+        return day.dsa[0].problem;
       }
       return 'Binary Search'; // Classic default matching prompt
     }
@@ -265,14 +259,12 @@ export const TodayDashboard: React.FC<TodayDashboardProps> = ({
     (day.schedule || []).some((s) => s.category === 'dsa' && s.status === 'completed');
 
   const isAcademicDone = Boolean(
-    (day.academics?.subject && (day.dailyReflection?.academicLearned || day.academics?.notes)) ||
+    (day.academics?.subject && (day.dailyReflection?.academicLearned || day.academics?.learned || day.academics?.output)) ||
       (day.schedule || []).some((s) => s.category === 'academic' && s.status === 'completed')
   );
 
   const isReviewDone = Boolean(
-    day.dailyReflection?.completed ||
-      day.stats?.tomorrowFirstAction ||
-      day.tomorrowFirstAction ||
+    day.tomorrowFirstAction ||
       day.notes
   );
 
@@ -437,6 +429,7 @@ export const TodayDashboard: React.FC<TodayDashboardProps> = ({
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6 md:py-8 space-y-6">
+      <BehavioralCommandCenter day={day} onUpdateDay={onUpdateDay} />
       {/* 1. HERO HEADER & ASCII PROGRESS BAR */}
       <header className="pb-4 border-b border-[#1b212f] space-y-3">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">

@@ -137,6 +137,14 @@ export class FirestoreRulesEvaluator {
         if (data.dsa && (!Array.isArray(data.dsa) || data.dsa.length > 50)) {
           return { allowed: false, reason: 'ARRAY_LIMIT_EXCEEDED: dsa exceeds 50 items' };
         }
+        if (data.schemaVersion !== undefined && (!Number.isInteger(data.schemaVersion) || data.schemaVersion < 0 || data.schemaVersion > 100)) {
+          return { allowed: false, reason: 'INVALID_SCHEMA_VERSION: schemaVersion must be 0-100' };
+        }
+        for (const [field, limit] of [['outcomes', 10], ['focusSessions', 20], ['recoveryDecisions', 20], ['creditEvents', 20]] as const) {
+          if (data[field] && (!Array.isArray(data[field]) || data[field].length > limit)) {
+            return { allowed: false, reason: `ARRAY_LIMIT_EXCEEDED: ${field} exceeds ${limit} items` };
+          }
+        }
         return { allowed: true };
       }
     }
@@ -316,6 +324,15 @@ function runSecurityTests() {
     '16b. Non-main settings ID rejected',
     false,
     FirestoreRulesEvaluator.evaluate('users/user_alice_123/settings/malicious_custom_id', 'create', userA, undefined, { theme: 'light' })
+  );
+
+  assertRule(
+    '17. Write with oversized Behavioral Core focus sessions rejected',
+    false,
+    FirestoreRulesEvaluator.evaluate('users/user_alice_123/days/2026-09-03', 'create', userA, undefined, {
+      ...validDayRecord,
+      focusSessions: Array.from({ length: 21 }, () => ({})),
+    })
   );
 
   console.log(`\nResults: ${passed} passed, ${failed} failed out of ${passed + failed} assertions.`);

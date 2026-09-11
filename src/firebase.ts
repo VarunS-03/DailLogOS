@@ -26,6 +26,7 @@ import {
 import { initializeAppCheck, ReCaptchaEnterpriseProvider, ReCaptchaV3Provider, AppCheck } from 'firebase/app-check';
 import { AuthErrorInfo, AuthUser, DayRecord, UserSettings } from './types';
 import { createDefaultDayRecord } from './constants/templates';
+import { normalizeDayRecord, withCurrentSchemaVersion } from './utils/dayRecord';
 
 // Firebase Configuration Interface
 interface FirebaseConfig {
@@ -369,7 +370,7 @@ export async function loadDayRecord(
       const dayDocRef = doc(firestoreInstance, 'users', uid, 'days', dateStr);
       const snapshot = await getDoc(dayDocRef);
       if (snapshot.exists()) {
-        const data = snapshot.data() as DayRecord;
+        const data = normalizeDayRecord(snapshot.data() as DayRecord);
         // Save to user-scoped local cache
         cacheUserDay(uid, data);
         return data;
@@ -382,7 +383,7 @@ export async function loadDayRecord(
   // Check user-scoped local cache
   if (uid) {
     const cached = getUserCachedDay(uid, dateStr);
-    if (cached) return cached;
+    if (cached) return normalizeDayRecord(cached);
   }
 
   // Generate a clean default DayRecord if no previous entry exists
@@ -398,7 +399,7 @@ export async function saveDayRecord(uid: string | null, day: DayRecord): Promise
   }
 
   const updatedDay: DayRecord = {
-    ...day,
+    ...withCurrentSchemaVersion(day),
     updatedAt: new Date().toISOString(),
   };
 
@@ -438,7 +439,7 @@ export function subscribeToDayRecord(
       dayDocRef,
       (docSnap) => {
         if (docSnap.exists()) {
-          const record = docSnap.data() as DayRecord;
+          const record = normalizeDayRecord(docSnap.data() as DayRecord);
           cacheUserDay(uid, record);
           callback(record);
         }
@@ -466,7 +467,7 @@ export async function loadAllDays(uid: string, dayLimit = 180): Promise<Record<s
       const q = query(daysColRef, orderBy('date', 'desc'), limit(dayLimit));
       const snapshot = await getDocs(q);
       snapshot.forEach((docSnap) => {
-        const record = docSnap.data() as DayRecord;
+        const record = normalizeDayRecord(docSnap.data() as DayRecord);
         result[docSnap.id] = record;
         cacheUserDay(uid, record);
       });
@@ -593,7 +594,7 @@ export function getAllUserCachedDays(uid: string): Record<string, DayRecord> {
       try {
         const val = localStorage.getItem(key);
         if (val) {
-          result[dateStr] = JSON.parse(val);
+          result[dateStr] = normalizeDayRecord(JSON.parse(val) as DayRecord);
         }
       } catch {
         // ignore

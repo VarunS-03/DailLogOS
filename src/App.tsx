@@ -28,6 +28,7 @@ import { DailyReviewView } from './components/DailyReviewView';
 import { CalendarView } from './components/CalendarView';
 import { HistoryView } from './components/HistoryView';
 import { SettingsView } from './components/SettingsView';
+import { getLocalDateId } from './utils/localDate';
 
 // Valid routes
 const VALID_TABS: TabType[] = [
@@ -98,12 +99,12 @@ export default function App() {
 
   // Active Date State (Preserved across all navigation!)
   const [selectedDate, setSelectedDate] = useState<string>(() => {
-    return new Date().toISOString().split('T')[0];
+    return getLocalDateId();
   });
 
   // Current Day Record (Single source of truth)
   const [currentDay, setCurrentDay] = useState<DayRecord>(() => {
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = getLocalDateId();
     return createDefaultDayRecord(todayStr, DEFAULT_SETTINGS);
   });
 
@@ -229,11 +230,11 @@ export default function App() {
       isMounted = false;
       if (unsubSnapshot) unsubSnapshot();
     };
-  }, [selectedDate, user]);
+  }, [selectedDate, user, settings]);
 
   // 5. Save updates to Day Record with debounce (Single Source of Truth)
   const handleUpdateDay = useCallback(
-    (updatedDay: DayRecord) => {
+    (updatedDay: DayRecord): Promise<void> => {
       const dayWithScore = {
         ...updatedDay,
         completionPercentage: calculateCompletionPercentage(updatedDay),
@@ -250,16 +251,20 @@ export default function App() {
         clearTimeout(saveTimeoutRef.current);
       }
 
-      saveTimeoutRef.current = setTimeout(async () => {
-        try {
-          await saveDayRecord(user ? user.uid : null, dayWithScore);
-          setSyncStatus('synced');
-          setLastSyncedAt(new Date().toLocaleTimeString());
-        } catch (err) {
-          console.error('Error auto-saving day:', err);
-          setSyncStatus('error');
-        }
-      }, 600);
+      return new Promise((resolve, reject) => {
+        saveTimeoutRef.current = setTimeout(async () => {
+          try {
+            await saveDayRecord(user ? user.uid : null, dayWithScore);
+            setSyncStatus('synced');
+            setLastSyncedAt(new Date().toLocaleTimeString());
+            resolve();
+          } catch (err) {
+            console.error('Error auto-saving day:', err);
+            setSyncStatus('error');
+            reject(err);
+          }
+        }, 600);
+      });
     },
     [user]
   );
@@ -302,7 +307,7 @@ export default function App() {
       clearUserLocalCache(uid);
     }
     setAllDays({});
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = getLocalDateId();
     const freshDay = createDefaultDayRecord(todayStr, DEFAULT_SETTINGS);
     setCurrentDay(freshDay);
     setSettings(DEFAULT_SETTINGS);

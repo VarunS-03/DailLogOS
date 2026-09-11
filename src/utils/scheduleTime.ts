@@ -1,4 +1,5 @@
 import { ScheduleItem, TabType } from '../types';
+import { getLocalDateId } from './localDate';
 
 export interface CurrentBlockResult {
   block: ScheduleItem | null;
@@ -161,7 +162,7 @@ export function getNowAndNextScheduleBlocks(
   }
 
   const now = new Date();
-  const todayStr = now.toISOString().split('T')[0];
+  const todayStr = getLocalDateId(now);
 
   // If viewing a past or future date, select first pending block
   if (dateStr !== todayStr) {

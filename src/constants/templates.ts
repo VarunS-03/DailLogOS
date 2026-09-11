@@ -10,6 +10,7 @@ import {
   SkillSession,
   UserSettings
 } from '../types';
+import { CURRENT_DAY_SCHEMA_VERSION } from '../types';
 
 export const DAYS_OF_WEEK = [
   'Sunday',
@@ -253,6 +254,7 @@ export function createDefaultDayRecord(dateStr: string, settings?: UserSettings)
   const now = new Date().toISOString();
 
   return {
+    schemaVersion: CURRENT_DAY_SCHEMA_VERSION,
     date: dateStr,
     dayOfWeek,
     completionPercentage: 0,

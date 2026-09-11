@@ -40,7 +40,7 @@ flowchart LR
     Rules --> UserData["User data: /users/{uid}/days and /users/{uid}/settings"]
 ```
 
-The main state and view composition live in `src/App.tsx`. Firebase access and UID-scoped cache helpers live in `src/firebase.ts`. UI views are in `src/components/`, reusable Today sections are in `src/components/today/`, and input/backup helpers are in `src/utils/`. `firestore.rules` protects the `/users/{uid}/` data tree.
+The main state and view composition live in `src/App.tsx`. Firebase access and UID-scoped cache helpers live in `src/firebase.ts`. UI views are in `src/components/`, reusable Today sections are  qin `src/components/today/`, and input/backup helpers are in `src/utils/`. `firestore.rules` protects the `/users/{uid}/` data tree.
 
 ## Technology Stack
 
