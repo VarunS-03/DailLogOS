@@ -2,6 +2,7 @@ import { Outcome, FocusSession, BehavioralReview } from '../src/types';
 import { canAddOpenOutcome, completeReview, decideRecovery, generateTomorrowHandoff, maxOutcomesForCapacity, minimumViableDay, proposeStartDay, recommendNextAction, replaceOutcome, transitionFocusSession, transitionOutcome } from '../src/services/behavioral';
 import { getPrescribedSetCount } from '../src/utils/workout';
 import { createDefaultDayRecord, DEFAULT_SETTINGS } from '../src/constants/templates';
+import { parseAppCustomizationResponse } from '../src/services/appCustomization';
 
 let passed = 0;
 function assert(name: string, condition: boolean): void { if (!condition) throw new Error(`FAIL: ${name}`); passed++; }
@@ -50,6 +51,30 @@ const personalizedDay = createDefaultDayRecord('2026-11-16', {
   },
 });
 assert('personalized onboarding routine seeds future days with reset completion state', personalizedDay.schedule[0]?.title === 'Custom focus' && personalizedDay.schedule[0]?.status === 'pending' && personalizedDay.habits[0]?.completed === false && personalizedDay.workout.exercises[0]?.sets === 5);
+const commandDay = createDefaultDayRecord('2026-11-16', DEFAULT_SETTINGS);
+commandDay.schedule[0].status = 'completed';
+const commandResult = parseAppCustomizationResponse(JSON.stringify({
+  summary: 'Added a new reading block.',
+  dailySystem: {
+    workoutMode: 'gym',
+    workoutCycle: commandDay.workout.cycleDay,
+    schedule: [
+      { title: commandDay.schedule[0].title, time: commandDay.schedule[0].time, category: commandDay.schedule[0].category },
+      { title: 'Reading', time: '20:00–20:30', category: 'reading' },
+    ],
+    habits: [{ title: commandDay.habits[0].title, detail: commandDay.habits[0].detail }],
+    nonNegotiables: [{ name: commandDay.workout.dailyNonNegotiables[0].name, target: 'Daily' }],
+    workoutExercises: [{ name: 'New exercise', target: '8 reps', sets: 2 }],
+  },
+}), commandDay);
+assert('AI customization preserves matching block identity and completion while adding requested blocks', commandResult.dailySystem.schedule.length === 2 && commandResult.dailySystem.schedule[0].id === commandDay.schedule[0].id && commandResult.dailySystem.schedule[0].status === 'completed');
+let malformedCommandRejected = false;
+try {
+  parseAppCustomizationResponse('not JSON', commandDay);
+} catch {
+  malformedCommandRejected = true;
+}
+assert('malformed AI customization output is rejected for an explicit user-visible error', malformedCommandRejected);
 
 const session: FocusSession = { id: 's1', objective: 'Solve', minimumOutput: 'Invariant', startedAt: context.now, status: 'active' };
 assert('completed non-physical session requires output', !transitionFocusSession(session, 'completed', { endedAt: context.now }).ok);

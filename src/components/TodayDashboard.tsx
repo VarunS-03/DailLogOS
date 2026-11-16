@@ -114,6 +114,14 @@ export const TodayDashboard: React.FC<TodayDashboardProps> = ({
     await onUpdateDay({ ...day, schedule: updated });
   };
 
+  const addScheduleBlock = async (block: ScheduleItem) => {
+    await onUpdateDay({ ...day, schedule: [...(day.schedule || []), block] });
+  };
+
+  const deleteScheduleBlock = async (id: string) => {
+    await onUpdateDay({ ...day, schedule: (day.schedule || []).filter((item) => item.id !== id) });
+  };
+
   const handleStartFocus = (block: ScheduleItem) => {
     setTimerBlockTitle(block.title);
     setActiveTimerSeconds(25 * 60); // 25m Pomodoro
@@ -278,6 +286,8 @@ export const TodayDashboard: React.FC<TodayDashboardProps> = ({
       <TimelineSchedule
         schedule={day.schedule || []}
         onToggleStatus={toggleSchedule}
+        onAddBlock={addScheduleBlock}
+        onDeleteBlock={deleteScheduleBlock}
         onStartFocus={handleStartFocus}
       />
 

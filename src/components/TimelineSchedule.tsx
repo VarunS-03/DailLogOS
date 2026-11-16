@@ -9,13 +9,15 @@ import {
   Sparkles,
   ChevronDown,
   ChevronUp,
+  Trash2,
 } from 'lucide-react';
 import { ScheduleItem } from '../types';
 
 interface TimelineScheduleProps {
   schedule: ScheduleItem[];
   onToggleStatus: (id: string, status: 'completed' | 'skipped' | 'pending') => void;
-  onAddBlock?: (item: ScheduleItem) => void;
+  onAddBlock: (item: ScheduleItem) => Promise<void>;
+  onDeleteBlock: (id: string) => Promise<void>;
   onStartFocus?: (block: ScheduleItem) => void;
 }
 
@@ -23,33 +25,52 @@ export const TimelineSchedule: React.FC<TimelineScheduleProps> = ({
   schedule,
   onToggleStatus,
   onAddBlock,
+  onDeleteBlock,
   onStartFocus,
 }) => {
   const [showAdd, setShowAdd] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newTime, setNewTime] = useState('');
   const [isExpanded, setIsExpanded] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [actionError, setActionError] = useState('');
 
   const completedCount = schedule.filter((s) => s.status === 'completed').length;
   const progressPercent = schedule.length > 0 ? Math.round((completedCount / schedule.length) * 100) : 0;
 
-  const handleAddSubmit = (e: React.FormEvent) => {
+  const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTitle.trim()) return;
+    if (!newTitle.trim() || isSaving) return;
 
-    if (onAddBlock) {
-      onAddBlock({
+    setIsSaving(true);
+    setActionError('');
+    try {
+      await onAddBlock({
         id: `sched-custom-${Date.now()}`,
         time: newTime.trim() || 'Flexible',
         title: newTitle.trim(),
         category: 'other',
         status: 'pending',
       });
+      setNewTitle('');
+      setNewTime('');
+      setShowAdd(false);
+    } catch (error) {
+      console.error('Failed to add schedule block:', error);
+      setActionError('Could not save this block. Please try again.');
+    } finally {
+      setIsSaving(false);
     }
+  };
 
-    setNewTitle('');
-    setNewTime('');
-    setShowAdd(false);
+  const handleDeleteBlock = async (id: string) => {
+    setActionError('');
+    try {
+      await onDeleteBlock(id);
+    } catch (error) {
+      console.error('Failed to delete schedule block:', error);
+      setActionError('Could not delete this block. Please try again.');
+    }
   };
 
   return (
@@ -107,19 +128,22 @@ export const TimelineSchedule: React.FC<TimelineScheduleProps> = ({
             <button
               type="button"
               onClick={() => setShowAdd(false)}
+              disabled={isSaving}
               className="px-3 py-2 rounded-lg text-xs text-zinc-400 hover:text-white"
             >
               Cancel
             </button>
             <button
               type="submit"
+              disabled={isSaving || !newTitle.trim()}
               className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold"
             >
-              Add
+              {isSaving ? 'Saving…' : 'Add'}
             </button>
           </div>
         </form>
       )}
+      {actionError && <p role="alert" className="mt-2 text-xs text-red-300">{actionError}</p>}
 
       {/* Timeline items */}
       {isExpanded && (
@@ -183,6 +207,15 @@ export const TimelineSchedule: React.FC<TimelineScheduleProps> = ({
                       <span>Focus</span>
                     </button>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteBlock(item.id)}
+                    aria-label={`Delete ${item.title}`}
+                    title="Delete block"
+                    className="p-1.5 rounded-md text-zinc-500 hover:text-red-300 hover:bg-red-950/30 focus-visible:text-red-300 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
             );

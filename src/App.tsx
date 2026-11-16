@@ -193,9 +193,13 @@ export default function App() {
     }
   };
 
-  const handleUpdateSettings = (newSettings: UserSettings) => {
+  const handleUpdateSettingsAndWait = async (newSettings: UserSettings) => {
     setSettings(newSettings);
-    void persistSettings(newSettings).catch((err) => {
+    await persistSettings(newSettings);
+  };
+
+  const handleUpdateSettings = (newSettings: UserSettings) => {
+    void handleUpdateSettingsAndWait(newSettings).catch((err) => {
       console.error('Failed to save user settings:', err);
     });
   };
@@ -328,7 +332,12 @@ export default function App() {
         </div>
 
         {/* Floating AI Omni-logger */}
-        <AiChatBubble day={currentDay} onUpdateDay={handleUpdateDay} />
+        <AiChatBubble
+          day={currentDay}
+          onUpdateDay={handleUpdateDay}
+          settings={settings}
+          onUpdateSettings={handleUpdateSettingsAndWait}
+        />
 
         {/* Multi-Agent Onboarding Calibration Modal (With Google Sign-in Linked) */}
         {showOnboarding && (

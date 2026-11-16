@@ -1,0 +1,80 @@
+# Daily OS — Luxury Fluid UI & WebGL Motion Architectural Handoff
+
+**Author Perspective:** Creative Technologist & High-End Product Designer (Apple / Nike / Linear aesthetic)
+
+**Core Directive:** Transition Daily OS from harsh neon cybernetics to a tactile, cinematic, fluid-glass interface built on WebGL shaders, physical spring curves, and modern frosted light refraction.
+
+---
+
+## 1. Visual Identity Overhaul: From "Cyberpunk Console" to "Tactile Luxury Glass"
+
+### The Problem
+* Saturated greens (`#10b981`), bright cyans, and harsh neon outlines evoke a terminal emulator or hacker dashboard, inducing cognitive agitation rather than serene executive focus.
+* Flat dark panels (`#0c0e12`) lack depth and physical light behavior.
+
+### The New Aesthetic System: *Hyper-Minimal Frost & Specular Glass*
+
+| Dimension | Current Cybernetic | Luxury Modern Fluid (Target) |
+|---|---|---|
+| **Canvas** | Pure void black `#090b10` | Warm Obsidian & Charcoal `#0b0c10` with subtle vignette |
+| **Materiality** | 1px flat borders `#202534` | Frosted Float Glass: `backdrop-filter: blur(28px)`, multi-layer specular highlights |
+| **Accent Palette** | High-saturation Green/Cyan/Purple | **Monochrome & Specular Tint**: Brushed Platinum (`#f1f5f9`), Warm Bone (`#e2e8f0`), Subtle Muted Gold/Champagne (`#d4af37`), Soft Slate (`#64748b`) |
+| **Depth & Light** | Flat borders | Dual-layer box shadows + directional inner edge borders (`rgba(255,255,255,0.08)` on top, `rgba(0,0,0,0.4)` on bottom) |
+| **Typography** | Monospace uppercase across headers | Neo-grotesque typography: **Geist**, **SF Pro Display**, or **Cabinet Grotesk** with tight tracking (`tracking-tight`) |
+
+---
+
+## 2. WebGL & Fluid Motion Architecture
+
+### Recommended Stack
+* **WebGL / Shader Layer**: `@react-three/fiber` + `glsl-canvas` or lightweight raw Three.js shaders.
+* **Physics & Springs**: `motion` (Framer Motion v12) with spring physics (`stiffness: 300, damping: 30`).
+* **Smooth Inertial Scrolling**: `lenis` by Studio Freight (standard on high-end design sites like Nike and Yeezy).
+
+### Shader Background Concept: *Ambient Specular Flow*
+Instead of a static dark background, render an interactive, GPU-accelerated liquid gradient mesh that reacts gently to cursor motion and ambient daylight:
+* **Vertex Shader**: Subtle Perlin/Simplex noise elevation of mesh vertices at 0.05Hz.
+* **Fragment Shader**: Blends three non-neon chromatic nodes: Deep Slate `#11141c`, Deep Royal Ash `#141724`, and Ambient Mica `#1e2436`.
+* **Zero Performance Tax**: Rendered at half resolution with FXAA blur and paused during low battery/tab blur via `requestAnimationFrame` lifecycle hooks.
+
+---
+
+## 3. High-End Micro-Interactions & Tactile Patterns
+
+### 1. Interactive Refraction Cards (Apple Vision / Nike Style)
+* Cards calculate mouse proximity: as the cursor sweeps across a container, a subtle radial specular gradient (`radial-gradient(circle at X Y, rgba(255,255,255,0.06), transparent 70%)`) reflects on the glass surface.
+* Subtle 3D tilt using CSS `transform: perspective(1000px) rotateX(...) rotateY(...)` with dampening.
+
+### 2. Elastic Action Completion
+* When toggling non-negotiables or timeline blocks:
+  * Checkbox expands with a subtle physical overshoot (spring physics).
+  * Smooth liquid border wave traverses the card edge instead of an immediate binary color pop.
+  * Haptic-style visual pulse (scale 0.98 -> 1.02 -> 1.0).
+
+### 3. Glass Morphism Navigation Drawer
+* Floating pill navigation with blur transmission: UI elements scrolling underneath the glass bar are softly visible and desaturated.
+* Active tab indicator travels as a continuous fluid pill with elastic trailing edges (`layoutId="activeTabIndicator"` via Motion).
+
+---
+
+## 4. Implementation Blueprint & File Targets
+
+```text
+src/
+├── components/
+│   ├── canvas/
+│   │   ├── FluidBackground.tsx     # WebGL liquid shader canvas (Three.js/Fiber)
+│   │   └── GlassCard.tsx           # Reusable specular light-reactive card
+│   └── ui/
+│       ├── SmoothScrollProvider.tsx # Lenis smooth momentum scrolling provider
+│       └── FluidProgressRing.tsx    # SVG gradient glow with organic ease curves
+└── styles/
+    ├── luxuryGlass.css             # Specular highlight gradients and blur layers
+    └── typography.css              # Custom editorial type hierarchy
+```
+
+### Next Steps for Implementation
+1. **Install Creative Tools**: `three`, `@react-three/fiber`, `lenis`.
+2. **Implement `FluidBackground.tsx`**: Replace CSS gradients with the ambient liquid shader canvas.
+3. **Refactor Glass Cards**: Convert standard containers into light-responsive `GlassCard` wrappers.
+4. **Tune Spring Physics**: Replace standard CSS transitions with unified spring curves across all tabs and drawers.
