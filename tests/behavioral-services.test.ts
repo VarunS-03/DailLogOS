@@ -1,5 +1,7 @@
 import { Outcome, FocusSession, BehavioralReview } from '../src/types';
 import { canAddOpenOutcome, completeReview, decideRecovery, generateTomorrowHandoff, maxOutcomesForCapacity, minimumViableDay, proposeStartDay, recommendNextAction, replaceOutcome, transitionFocusSession, transitionOutcome } from '../src/services/behavioral';
+import { getPrescribedSetCount } from '../src/utils/workout';
+import { createDefaultDayRecord, DEFAULT_SETTINGS } from '../src/constants/templates';
 
 let passed = 0;
 function assert(name: string, condition: boolean): void { if (!condition) throw new Error(`FAIL: ${name}`); passed++; }
@@ -34,6 +36,20 @@ assert('capacity limits are explicit', maxOutcomesForCapacity('normal') === 3 &&
 assert('start proposal honors minimum capacity', proposeStartDay({ capacity: 'minimum', signals, context, createdAt: context.now }).length === 1);
 assert('start proposal honors normal and reduced capacity', proposeStartDay({ capacity: 'normal', signals, context, createdAt: context.now }).length === 3 && proposeStartDay({ capacity: 'reduced', signals, context, createdAt: context.now }).length === 2);
 assert('minimum viable day preserves review and handoff', minimumViableDay('minimum', signals).requiresReview && minimumViableDay('minimum', signals).requiresHandoff);
+assert('workout sets follow the prescribed target', getPrescribedSetCount('4 × 8–10') === 4 && getPrescribedSetCount('2 x 15') === 2);
+assert('unrecognized workout targets use one set and excessive prescriptions are capped', getPrescribedSetCount('as tolerated') === 1 && getPrescribedSetCount('12 × 5') === 10);
+const personalizedDay = createDefaultDayRecord('2026-11-16', {
+  ...DEFAULT_SETTINGS,
+  dailySystem: {
+    workoutMode: 'gym',
+    schedule: [{ id: 'custom-slot', time: '10:00–11:00', title: 'Custom focus', category: 'project', status: 'completed' }],
+    habits: [{ id: 'custom-habit', title: 'Custom habit', detail: 'Daily', completed: true }],
+    nonNegotiables: [{ id: 'custom-commitment', name: 'Custom commitment', target: 'Once', completed: true }],
+    workoutCycle: 'Custom cycle',
+    workoutExercises: [{ name: 'Custom movement', target: '5 × 5', sets: 5 }],
+  },
+});
+assert('personalized onboarding routine seeds future days with reset completion state', personalizedDay.schedule[0]?.title === 'Custom focus' && personalizedDay.schedule[0]?.status === 'pending' && personalizedDay.habits[0]?.completed === false && personalizedDay.workout.exercises[0]?.sets === 5);
 
 const session: FocusSession = { id: 's1', objective: 'Solve', minimumOutput: 'Invariant', startedAt: context.now, status: 'active' };
 assert('completed non-physical session requires output', !transitionFocusSession(session, 'completed', { endedAt: context.now }).ok);

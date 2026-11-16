@@ -76,6 +76,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       settings: {
         defaultWorkoutMode: settings.defaultWorkoutMode,
         academicSchedule: settings.academicSchedule,
+        dailySystem: settings.dailySystem,
         theme: settings.theme,
         notificationsEnabled: settings.notificationsEnabled,
       },
@@ -392,6 +393,97 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <span className="text-zinc-500">Auth Handler Domain: </span>
                   <span className="text-zinc-300">{diagnostics.authDomain || 'Default'}</span>
                 </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Custom Wallpaper Section */}
+      <section className="p-5 rounded-xl bg-[#12151e] border border-[#202534] space-y-4">
+        <h2 className="text-sm font-semibold tracking-wide uppercase text-zinc-200 flex items-center gap-2">
+          <span>Custom Wallpaper & Atmosphere</span>
+        </h2>
+        <p className="text-xs text-zinc-400">
+          Personalize your daily dashboard with your own aesthetic wallpaper. The image remains securely stored in your local browser profile.
+        </p>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+              Wallpaper Image (Upload File or Enter Image URL)
+            </label>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                placeholder="https://images.unsplash.com/... or paste image URL"
+                value={settings.customWallpaper || ''}
+                onChange={(e) => onUpdateSettings({ ...settings, customWallpaper: e.target.value })}
+                className="flex-1 px-3 py-2 bg-[#0e1118] border border-[#232938] rounded-lg text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-indigo-500 font-mono"
+              />
+              <label className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-lg border border-zinc-700 flex items-center justify-center gap-2 cursor-pointer shrink-0 transition-colors">
+                <Upload className="w-3.5 h-3.5" />
+                <span>Upload File</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      const reader = new FileReader();
+                      reader.onload = (event) => {
+                        const dataUrl = event.target?.result as string;
+                        if (dataUrl) {
+                          onUpdateSettings({ ...settings, customWallpaper: dataUrl });
+                        }
+                      };
+                      reader.readAsDataURL(file);
+                    }
+                  }}
+                  className="hidden"
+                />
+              </label>
+              {settings.customWallpaper && (
+                <button
+                  onClick={() => onUpdateSettings({ ...settings, customWallpaper: '' })}
+                  className="px-3 py-2 bg-red-950/40 hover:bg-red-900/60 text-red-300 text-xs rounded-lg border border-red-800/40 cursor-pointer"
+                >
+                  Reset
+                </button>
+              )}
+            </div>
+          </div>
+
+          {settings.customWallpaper && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+              <div>
+                <div className="flex justify-between text-xs text-zinc-300 mb-1">
+                  <span>Glass Blur Effect</span>
+                  <span className="font-mono text-zinc-400">{settings.wallpaperBlur ?? 6}px</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="20"
+                  value={settings.wallpaperBlur ?? 6}
+                  onChange={(e) => onUpdateSettings({ ...settings, wallpaperBlur: Number(e.target.value) })}
+                  className="w-full accent-indigo-500 cursor-pointer"
+                />
+              </div>
+
+              <div>
+                <div className="flex justify-between text-xs text-zinc-300 mb-1">
+                  <span>Background Dimming</span>
+                  <span className="font-mono text-zinc-400">{settings.wallpaperDim ?? 40}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="85"
+                  value={settings.wallpaperDim ?? 40}
+                  onChange={(e) => onUpdateSettings({ ...settings, wallpaperDim: Number(e.target.value) })}
+                  className="w-full accent-indigo-500 cursor-pointer"
+                />
               </div>
             </div>
           )}

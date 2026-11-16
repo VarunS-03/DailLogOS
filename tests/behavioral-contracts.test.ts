@@ -27,6 +27,23 @@ assert('behavioral fields serialize through import validation', Boolean(validate
 assert('invalid behavioral enums are rejected', !validateAndSanitizeBackup(validBackup({ ...validBehavioralDay, outcomes: [{ ...validBehavioralDay.outcomes[0], status: 'invalid' }] })).valid);
 assert('oversized behavioral arrays are rejected', !validateAndSanitizeBackup(validBackup({ ...validBehavioralDay, focusSessions: Array.from({ length: 21 }, () => ({})) })).valid);
 assert('malformed day keys are rejected', !validateAndSanitizeBackup(JSON.stringify({ days: { '11-09-2026': legacyDay } })).valid);
+const customSystemBackup = validateAndSanitizeBackup(JSON.stringify({
+  days: { '2026-09-11': legacyDay },
+  settings: {
+    defaultWorkoutMode: 'gym',
+    academicSchedule: {},
+    theme: 'dark',
+    dailySystem: {
+      workoutMode: 'gym',
+      schedule: [{ id: 's1', time: '10:00', title: 'Focus', category: 'project', status: 'pending' }],
+      habits: [{ id: 'h1', title: 'Walk', detail: 'Outside', completed: false }],
+      nonNegotiables: [{ id: 'n1', name: 'Review', target: 'Daily', completed: false }],
+      workoutCycle: 'Custom',
+      workoutExercises: [{ name: 'Movement', target: '4 × 8', sets: 4 }],
+    },
+  },
+}));
+assert('backup validation preserves a bounded personalized daily system', customSystemBackup.sanitizedSettings?.dailySystem?.workoutExercises[0]?.sets === 4);
 assert('local date uses local calendar fields', getLocalDateId(new Date(2026, 8, 11, 0, 5)) === '2026-09-11');
 assert('calendar navigation crosses local month boundaries', addDaysToDateId('2026-03-01', -1) === '2026-02-28');
 

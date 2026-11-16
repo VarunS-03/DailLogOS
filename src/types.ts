@@ -207,7 +207,6 @@ export interface DailyReflection {
 }
 
 export interface DayRecord {
-  // Absent records are legacy schema version 0 and are normalized in memory.
   schemaVersion?: number;
   date: string; // YYYY-MM-DD
   dayOfWeek: string;
@@ -239,8 +238,12 @@ export interface DayRecord {
 export interface UserSettings {
   defaultWorkoutMode: WorkoutMode;
   academicSchedule: Record<string, { primary: string; secondary: string }>;
+  dailySystem?: DailySystemTemplate;
   theme: 'dark' | 'light';
   notificationsEnabled?: boolean;
+  customWallpaper?: string; // Data URL or Image URL
+  wallpaperBlur?: number;   // 0 to 20 px
+  wallpaperDim?: number;    // 0 to 90 %
 }
 
 export interface AuthUser {
@@ -257,6 +260,15 @@ export interface AuthErrorInfo {
   message: string;
   hostname?: string;
   actionableStep?: string;
+}
+
+export interface DailySystemTemplate {
+  workoutMode: WorkoutMode;
+  schedule: ScheduleItem[];
+  habits: HabitItem[];
+  nonNegotiables: NonNegotiableItem[];
+  workoutCycle: string;
+  workoutExercises: Array<{ name: string; target: string; sets: number }>;
 }
 
 export type TabType =

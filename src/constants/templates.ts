@@ -8,9 +8,11 @@ import {
   AcademicsSession,
   ProjectSession,
   SkillSession,
-  UserSettings
+  UserSettings,
+  DailySystemTemplate,
 } from '../types';
 import { CURRENT_DAY_SCHEMA_VERSION } from '../types';
+import { getPrescribedSetCount } from '../utils/workout';
 
 export const DAYS_OF_WEEK = [
   'Sunday',
@@ -52,90 +54,12 @@ export const DEFAULT_NON_NEGOTIABLES: Omit<NonNegotiableItem, 'id' | 'completed'
 
 export const ACADEMIC_SUBJECTS = [
   'Optimization Techniques',
-  'DBMS',
+  'Database Management Systems',
   'Digital Electronics',
-  'C',
-  'DSA',
-  'Other'
+  'Data Structures & Algorithms',
+  'Operating Systems & Architecture',
+  'Other / Research',
 ];
-
-export const DEFAULT_WEEKLY_ROTATION: Record<string, { primary: string; secondary: string }> = {
-  Monday: { primary: 'Optimization', secondary: 'DBMS' },
-  Tuesday: { primary: 'DSA', secondary: 'Digital Electronics' },
-  Wednesday: { primary: 'Optimization', secondary: 'C' },
-  Thursday: { primary: 'DBMS', secondary: 'DSA' },
-  Friday: { primary: 'Digital Electronics', secondary: 'Optimization' },
-  Saturday: { primary: 'C', secondary: 'DBMS' },
-  Sunday: { primary: 'Weekly retrieval', secondary: 'Weakest subject' },
-};
-
-export const GYM_WORKOUT_PLANS = {
-  'Day A — Shoulders + Chest': [
-    { name: 'Incline DB Press', target: '3 × 8–10' },
-    { name: 'DB Lateral Raise', target: '4 × 12–15' },
-    { name: 'DB Overhead Press', target: '3 × 8–10' },
-    { name: 'Chest Fly Machine', target: '3 × 10–12' },
-    { name: 'Face Pull', target: '3 × 15' },
-    { name: 'Hollow Body Hold', target: '2 × 20s' },
-    { name: 'Plank', target: '2 × 30s' },
-  ],
-  'Day B — Back + Biceps + Forearms': [
-    { name: 'Lat Pulldown Wide Grip', target: '4 × 8–10' },
-    { name: 'Lat Pulldown Close/Neutral', target: '3 × 10–12' },
-    { name: 'Barbell or DB Bent-Over Row', target: '3 × 8–10' },
-    { name: 'Preacher Curl', target: '3 × 8–10' },
-    { name: 'DB Hammer Curl', target: '2 × 10–12' },
-    { name: 'DB Wrist Curl', target: '2 × 12–15' },
-    { name: 'DB Reverse Wrist Curl', target: '2 × 12–15' },
-    { name: 'Dead Bug', target: '2 × 8/side' },
-    { name: 'Side Plank', target: '2 × 25s/side' },
-  ],
-  'Day C — Legs + Triceps + Forearms': [
-    { name: 'Barbell Squat', target: '3 × 8–10' },
-    { name: 'Leg Press', target: '3 × 10–12' },
-    { name: 'Romanian Deadlift', target: '3 × 8–10' },
-    { name: 'Chest Fly Machine, tricep setting', target: '3 × 10–12' },
-    { name: 'Dips', target: '3 × 5–8' },
-    { name: "Farmer's Carry", target: '3 × 20–25s' },
-    { name: 'Hollow Body Hold', target: '2 × 20s' },
-    { name: 'Reverse Crunch', target: '2 × 10' },
-  ],
-};
-
-export const CALISTHENICS_WORKOUT_PLANS = {
-  'Day 1 — Push Foundations + Upper Core': [
-    { name: 'Full Push-Up', target: '3 × 8–10' },
-    { name: 'Slow Negative Push-Up', target: '2 × 4–5' },
-    { name: 'Incline Pike Push-Up', target: '2 × 5–6' },
-    { name: 'Planche Lean', target: '2 × 10–15s' },
-    { name: 'Wall Handstand Hold', target: '2 × 10–15s' },
-    { name: 'Dead Bug', target: '2 × 6/side' },
-    { name: 'Hollow Body Tuck Hold', target: '2 × 15–20s' },
-    { name: 'Forearm Plank', target: '2 × 30–35s' },
-    { name: 'Stomach Vacuum', target: '3 × 10s at end' },
-  ],
-  'Day 2 — Pull Foundations + Posture + Lower Core': [
-    { name: 'Dead Hang', target: '3 × 10–15s' },
-    { name: 'Scapular Pull', target: '3 × 6–8' },
-    { name: 'Negative Pull-Up', target: '2 × 2–3' },
-    { name: 'Band-Assisted Row', target: '3 × 10–12' },
-    { name: 'Reverse Snow Angels', target: '2 × 10' },
-    { name: 'Prone Y Raises', target: '2 × 10' },
-    { name: 'Reverse Crunch', target: '2 × 10' },
-    { name: 'Side Plank', target: '2 × 20–25s/side' },
-  ],
-  'Day 3 — Legs + Full-Body Skills + Core': [
-    { name: 'Bodyweight Squat', target: '3 × 12' },
-    { name: 'Reverse Lunge', target: '2 × 8/leg' },
-    { name: 'Single-Leg Glute Bridge', target: '2 × 8/side' },
-    { name: 'Wall Sit', target: '2 × 25–30s' },
-    { name: 'Assisted Pistol Squat', target: '2 × 5–6/leg' },
-    { name: 'Tuck L-Sit', target: '2 × 6–10s' },
-    { name: 'Leg Raises', target: '2 × 8–10' },
-    { name: 'Hollow Body Hold', target: '2 × 18–22s' },
-    { name: 'Bicycle Crunch', target: '2 × 14' },
-  ],
-};
 
 export const DSA_TAGS = [
   'Classify',
@@ -146,60 +70,117 @@ export const DSA_TAGS = [
   'Reimplement',
   'Explain',
   'Transfer',
-  'Review'
+  'Review',
 ];
 
-export const DEFAULT_USER_SETTINGS: UserSettings = {
-  defaultWorkoutMode: 'gym',
-  academicSchedule: DEFAULT_WEEKLY_ROTATION,
-  theme: 'dark',
+export const GYM_WORKOUT_PLANS: Record<string, { name: string; target: string }[]> = {
+  'Day A — Shoulders + Chest': [
+    { name: 'Warm-up / Arm circles + Band dislocates', target: '2 × 15' },
+    { name: 'Overhead DB Press', target: '3 × 8–10' },
+    { name: 'Incline DB Press', target: '3 × 10–12' },
+    { name: 'Lateral Raises', target: '4 × 15' },
+    { name: 'Push-ups (paused at bottom)', target: '3 × failure' },
+    { name: 'Rear Delt Flyes / Face Pulls', target: '3 × 15' },
+    { name: 'Tricep Rope Pushdown', target: '3 × 12' },
+    { name: 'Dead Hang', target: '3 × 45s' },
+  ],
+  'Day B — Back + Biceps + Core': [
+    { name: 'Warm-up / Cat-cow + Band pull-aparts', target: '2 × 15' },
+    { name: 'Lat Pulldown / Pull-ups', target: '4 × 8–10' },
+    { name: 'Chest-Supported DB Row', target: '3 × 10–12' },
+    { name: 'Face Pulls', target: '3 × 15' },
+    { name: 'Incline DB Curl', target: '3 × 10–12' },
+    { name: 'Hammer Curls', target: '3 × 12' },
+    { name: 'Hanging Knee Raises', target: '3 × 12–15' },
+    { name: 'Plank Hold', target: '3 × 60s' },
+  ],
+  'Day C — Legs + Abs': [
+    { name: 'Warm-up / Leg swings + Bodyweight squats', target: '2 × 20' },
+    { name: 'Goblet Squat / Barbell Squat', target: '4 × 8–10' },
+    { name: 'Romanian Deadlift (DB)', target: '3 × 10–12' },
+    { name: 'Walking Lunges', target: '3 × 12/leg' },
+    { name: 'Calf Raises', target: '4 × 15' },
+    { name: 'Cable Crunch / Ab Rollout', target: '3 × 15' },
+    { name: 'Dead Hang', target: '3 × 45s' },
+  ],
 };
 
-export const DEFAULT_SETTINGS = DEFAULT_USER_SETTINGS;
+export const CALISTHENICS_WORKOUT_PLANS: Record<string, { name: string; target: string }[]> = {
+  'Day 1 — Push Foundations + Upper Core': [
+    { name: 'Warm-up / Wrist mobility + Arm circles', target: '2 × 15' },
+    { name: 'Standard / Decline Push-ups', target: '4 × 12–15' },
+    { name: 'Pike Push-ups', target: '3 × 8–10' },
+    { name: 'Diamond Push-ups', target: '3 × 10' },
+    { name: 'Dips (Chair / Parallel Bars)', target: '3 × 8–12' },
+    { name: 'Hollow Body Hold', target: '3 × 30–45s' },
+    { name: 'Plank to Dolphin', target: '3 × 10' },
+  ],
+  'Day 2 — Pull Foundations + Posterior Chain': [
+    { name: 'Warm-up / Scapular retractions', target: '2 × 15' },
+    { name: 'Pull-ups / Inverted Rows', target: '4 × 6–10' },
+    { name: 'Australian Rows (Doorframe / Towel)', target: '3 × 12' },
+    { name: 'Chin-up Isometric Hang', target: '3 × 20s' },
+    { name: 'Reverse Snow Angels', target: '3 × 15' },
+    { name: 'Bird-Dog Hold', target: '3 × 30s/side' },
+  ],
+  'Day 3 — Legs + Core Synergy': [
+    { name: 'Warm-up / Ankle circles + Hip openers', target: '2 × 20' },
+    { name: 'Pistol Squat Progressions / Cossack', target: '3 × 8/leg' },
+    { name: 'Bulgarian Split Squats', target: '3 × 12/leg' },
+    { name: 'Single-Leg Glute Bridges', target: '3 × 15/leg' },
+    { name: 'Calf Raises on Edge', target: '4 × 20' },
+    { name: 'L-Sit / Tuck Sit Hold', target: '4 × 15–20s' },
+  ],
+};
 
-export function getDayOfWeekName(dateStr: string): string {
-  // Parse YYYY-MM-DD
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const date = new Date(y, m - 1, d);
-  return DAYS_OF_WEEK[date.getDay()];
-}
+export const DEFAULT_SETTINGS: UserSettings = {
+  defaultWorkoutMode: 'gym',
+  academicSchedule: {
+    Sunday: { primary: 'Revision / Catch-up', secondary: 'Planning' },
+    Monday: { primary: 'Optimization Techniques', secondary: 'DBMS' },
+    Tuesday: { primary: 'Digital Electronics', secondary: 'DSA' },
+    Wednesday: { primary: 'Operating Systems', secondary: 'Optimization' },
+    Thursday: { primary: 'DBMS', secondary: 'Digital Electronics' },
+    Friday: { primary: 'DSA & Algorithms', secondary: 'OS' },
+    Saturday: { primary: 'Open Project Sprint', secondary: 'Review' },
+  },
+  theme: 'dark',
+  notificationsEnabled: false,
+  customWallpaper: '',
+  wallpaperBlur: 6,
+  wallpaperDim: 40,
+};
 
 export function createDefaultDayRecord(dateStr: string, settings?: UserSettings): DayRecord {
-  const dayOfWeek = getDayOfWeekName(dateStr);
-  const scheduleRotation = settings?.academicSchedule || DEFAULT_WEEKLY_ROTATION;
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dateObj = new Date(y, m - 1, d);
+  const dayOfWeek = DAYS_OF_WEEK[dateObj.getDay()] || 'Monday';
+
+  const scheduleRotation = settings?.academicSchedule || DEFAULT_SETTINGS.academicSchedule;
   const rotation = scheduleRotation[dayOfWeek] || { primary: 'Optimization', secondary: 'DBMS' };
 
   // Determine initial workout cycle day
   const mode = settings?.defaultWorkoutMode || 'gym';
   let cycleDay = 'Day A — Shoulders + Chest';
-  let planExercises = GYM_WORKOUT_PLANS['Day A — Shoulders + Chest'];
+  let planExercises: Array<{ name: string; target: string; sets?: number }> =
+    GYM_WORKOUT_PLANS['Day A — Shoulders + Chest'];
 
   if (mode === 'home') {
     cycleDay = 'Day 1 — Push Foundations + Upper Core';
     planExercises = CALISTHENICS_WORKOUT_PLANS['Day 1 — Push Foundations + Upper Core'];
   }
 
-  const exercises: ExerciseRecord[] = planExercises.map((e, idx) => ({
-    id: `ex-${idx}-${e.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
-    name: e.name,
-    target: e.target,
-    completed: false,
-    skipped: false,
-    sets: 3,
-    reps: '',
-    weight: '',
-    duration: '',
-    notes: '',
-  }));
+  const dailySystem: DailySystemTemplate | undefined =
+    settings?.dailySystem?.workoutMode === mode ? settings.dailySystem : undefined;
 
-  const dailyNonNegotiables: NonNegotiableItem[] = DEFAULT_NON_NEGOTIABLES.map((n, idx) => ({
+  const dailyNonNegotiables: NonNegotiableItem[] = (dailySystem?.nonNegotiables || DEFAULT_NON_NEGOTIABLES).map((n, idx) => ({
     id: `nn-${idx}`,
     name: n.name,
     target: n.target,
     completed: false,
   }));
 
-  const schedule: ScheduleItem[] = DEFAULT_SCHEDULE_ITEMS.map((s, idx) => ({
+  const schedule: ScheduleItem[] = (dailySystem?.schedule || DEFAULT_SCHEDULE_ITEMS).map((s, idx) => ({
     id: `sched-${idx}`,
     time: s.time,
     title: s.title,
@@ -208,12 +189,30 @@ export function createDefaultDayRecord(dateStr: string, settings?: UserSettings)
     note: '',
   }));
 
-  const habits: HabitItem[] = DEFAULT_HABITS.map((h, idx) => ({
+  const habits: HabitItem[] = (dailySystem?.habits || DEFAULT_HABITS).map((h, idx) => ({
     id: `habit-${idx}`,
     title: h.title,
     detail: h.detail,
     completed: false,
     timeOfDay: h.timeOfDay,
+  }));
+
+  if (dailySystem) {
+    cycleDay = dailySystem.workoutCycle;
+    planExercises = dailySystem.workoutExercises;
+  }
+
+  const exercises: ExerciseRecord[] = planExercises.map((e, idx) => ({
+    id: `ex-${idx}-${e.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
+    name: e.name,
+    target: e.target,
+    completed: false,
+    skipped: false,
+    sets: e.sets ?? getPrescribedSetCount(e.target),
+    reps: '',
+    weight: '',
+    duration: '',
+    notes: '',
   }));
 
   const academics: AcademicsSession = {
@@ -292,7 +291,7 @@ export function calculateCompletionPercentage(day: DayRecord): number {
   let totalTrackable = 0;
   let completedCount = 0;
 
-  // 1. Schedule items (completed or skipped count towards progress resolution)
+  // 1. Schedule items
   if (day.schedule && day.schedule.length > 0) {
     day.schedule.forEach(item => {
       totalTrackable++;
@@ -329,7 +328,7 @@ export function calculateCompletionPercentage(day: DayRecord): number {
     });
   }
 
-  // 5. Academics (considered done if learned has text or output produced)
+  // 5. Academics
   totalTrackable++;
   if (day.academics && (day.academics.learned?.trim() || day.academics.objective?.trim())) {
     completedCount++;

@@ -17,47 +17,188 @@ import {
   AppAuthError,
 } from './firebase';
 import { Navigation } from './components/Navigation';
-import { DateContextBar } from './components/DateContextBar';
 import { TodayDashboard } from './components/TodayDashboard';
-import { AcademicsView } from './components/AcademicsView';
-import { DsaView } from './components/DsaView';
-import { WorkoutView } from './components/WorkoutView';
-import { ProjectsView } from './components/ProjectsView';
-import { ScheduleView } from './components/ScheduleView';
-import { DailyReviewView } from './components/DailyReviewView';
-import { CalendarView } from './components/CalendarView';
-import { HistoryView } from './components/HistoryView';
+import { TrackView } from './components/TrackView';
+import { InsightsView } from './components/InsightsView';
 import { SettingsView } from './components/SettingsView';
-import { getLocalDateId } from './utils/localDate';
-
-// Valid routes
-const VALID_TABS: TabType[] = [
-  'today',
-  'academics',
-  'dsa',
-  'projects',
-  'workout',
-  'schedule',
-  'calendar',
-  'review',
-  'history',
-  'settings',
-];
+import { AiChatBubble } from './components/AiChatBubble';
+import { FluidBackground } from './components/FluidBackground';
+import { SmoothScrollProvider } from './components/SmoothScrollProvider';
+import { OnboardingModal } from './components/OnboardingModal';
+import { GeneratedSystemArchetype } from './services/onboardingPipeline';
+import { getLocalDateId, addDaysToDateId } from './utils/localDate';
 
 export default function App() {
-  // Initialize active tab from pathname
   const [activeTab, setActiveTab] = useState<TabType>(() => {
     const path = window.location.pathname.replace(/^\/+/, '').toLowerCase();
-    if (VALID_TABS.includes(path as TabType)) {
+    if (['today', 'dsa', 'academics', 'workout', 'projects', 'review', 'calendar', 'history', 'settings'].includes(path)) {
       return path as TabType;
     }
     return 'today';
   });
 
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [authError, setAuthError] = useState<AuthErrorInfo | null>(null);
+
+  // Active Date State
+  const [selectedDate, setSelectedDate] = useState<string>(() => getLocalDateId());
+
+  // Current Day Record
+  const [currentDay, setCurrentDay] = useState<DayRecord>(() => {
+    return createDefaultDayRecord(getLocalDateId(), DEFAULT_SETTINGS);
+  });
+
+  // Yesterday's record for context & morning briefing momentum
+  const [yesterdayRecord, setYesterdayRecord] = useState<DayRecord | null>(null);
+
+  // All days cache
+  const [allDays, setAllDays] = useState<Record<string, DayRecord>>({});
+
+  // Settings with persistent wallpaper & styling
+  const [settings, setSettings] = useState<UserSettings>(() => DEFAULT_SETTINGS);
+
+  // Sync state
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
+
+  // Onboarding Modal Visibility
+  const [showOnboarding, setShowOnboarding] = useState<boolean>(() => {
+    return !localStorage.getItem('daily_os_onboarded');
+  });
+
+  // Debounce ref
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleSelectTab = (newTab: TabType) => {
+    setActiveTab(newTab);
+    const newPath = newTab === 'today' ? '/' : `/${newTab}`;
+    if (window.location.pathname !== newPath) {
+      window.history.pushState(null, '', newPath);
+    }
+  };
+
+  // Auth subscription
+  useEffect(() => {
+    const unsub = subscribeToAuth((authUser) => {
+      setUser(authUser);
+    });
+    return () => unsub();
+  }, []);
+
+  // Load stored days
+  useEffect(() => {
+    const stored = user ? loadAllDaysFromStorage(user.uid) : {};
+    setAllDays(stored);
+  }, [user]);
+
+  // Load user settings including custom wallpaper
+  useEffect(() => {
+    if (!user) {
+      // Check local storage for guest settings
+      const local = localStorage.getItem('daily_os_guest_settings');
+      if (local) {
+        try {
+          setSettings(JSON.parse(local));
+        } catch (_) {}
+      }
+      return;
+    }
+    loadUserSettings(user.uid).then((stored) => {
+      if (stored) {
+        setSettings(stored);
+      }
+    });
+  }, [user]);
+
+  // Load day record
+  useEffect(() => {
+    let isMounted = true;
+
+    async function fetchDays() {
+      setSyncStatus('syncing');
+      try {
+        const record = await loadDayRecord(user ? user.uid : null, selectedDate, settings);
+        const yDate = addDaysToDateId(selectedDate, -1);
+        const yRec = await loadDayRecord(user ? user.uid : null, yDate, settings);
+
+        if (isMounted) {
+          setCurrentDay(record);
+          setYesterdayRecord(yRec);
+          setAllDays((prev) => ({ ...prev, [selectedDate]: record }));
+          setSyncStatus('synced');
+        }
+      } catch (err) {
+        console.error('Failed to load day record:', err);
+        if (isMounted) setSyncStatus('idle');
+      }
+    }
+
+    fetchDays();
+
+    let unsubSnapshot: (() => void) | null = null;
+    if (user && isFirebaseConfigured) {
+      unsubSnapshot = subscribeToDayRecord(user.uid, selectedDate, (updated) => {
+        if (isMounted && updated) {
+          setCurrentDay(updated);
+          setAllDays((prev) => ({ ...prev, [selectedDate]: updated }));
+        }
+      });
+    }
+
+    return () => {
+      isMounted = false;
+      if (unsubSnapshot) unsubSnapshot();
+    };
+  }, [selectedDate, user, settings]);
+
+  // Save updates with debounce
+  const handleUpdateDay = useCallback(
+    (updatedDay: DayRecord): Promise<void> => {
+      const dayWithScore = {
+        ...updatedDay,
+        completionPercentage: calculateCompletionPercentage(updatedDay),
+        updatedAt: new Date().toISOString(),
+      };
+
+      setCurrentDay(dayWithScore);
+      setAllDays((prev) => ({ ...prev, [dayWithScore.date]: dayWithScore }));
+      setSyncStatus('syncing');
+
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+
+      return new Promise((resolve, reject) => {
+        saveTimeoutRef.current = setTimeout(async () => {
+          try {
+            await saveDayRecord(user ? user.uid : null, dayWithScore);
+            setSyncStatus('synced');
+            resolve();
+          } catch (err) {
+            console.error('Error auto-saving day:', err);
+            setSyncStatus('error');
+            reject(err);
+          }
+        }, 500);
+      });
+    },
+    [user]
+  );
+
+  const persistSettings = async (newSettings: UserSettings) => {
+    if (user) {
+      await saveUserSettings(user.uid, newSettings);
+    } else {
+      localStorage.setItem('daily_os_guest_settings', JSON.stringify(newSettings));
+    }
+  };
+
+  const handleUpdateSettings = (newSettings: UserSettings) => {
+    setSettings(newSettings);
+    void persistSettings(newSettings).catch((err) => {
+      console.error('Failed to save user settings:', err);
+    });
+  };
 
   const handleSignIn = async () => {
     setAuthError(null);
@@ -66,16 +207,7 @@ export default function App() {
       const authUser = await signInWithGoogle();
       setUser(authUser);
     } catch (err: unknown) {
-      if (err instanceof AppAuthError) {
-        setAuthError(err);
-      } else {
-        const message = err instanceof Error ? err.message : 'Sign-in failed. Please try again.';
-        setAuthError({
-          code: 'auth/unknown',
-          category: 'Authentication Error',
-          message,
-        });
-      }
+      if (err instanceof AppAuthError) setAuthError(err);
     } finally {
       setIsSigningIn(false);
     }
@@ -93,369 +225,141 @@ export default function App() {
     }
   };
 
-  const handleClearAuthError = () => {
-    setAuthError(null);
-  };
-
-  // Active Date State (Preserved across all navigation!)
-  const [selectedDate, setSelectedDate] = useState<string>(() => {
-    return getLocalDateId();
-  });
-
-  // Current Day Record (Single source of truth)
-  const [currentDay, setCurrentDay] = useState<DayRecord>(() => {
-    const todayStr = getLocalDateId();
-    return createDefaultDayRecord(todayStr, DEFAULT_SETTINGS);
-  });
-
-  // All days cache for Cross-Day References, Calendar & History
-  const [allDays, setAllDays] = useState<Record<string, DayRecord>>({});
-
-  // Settings
-  const [settings, setSettings] = useState<UserSettings>(() => {
-    return DEFAULT_SETTINGS;
-  });
-
-  // Sync state
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
-  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
-
-  // Debounce ref for auto-saving
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const isInitialLoadRef = useRef(true);
-
-  // Listen to browser popstate (back / forward buttons)
-  useEffect(() => {
-    const handlePopState = () => {
-      const path = window.location.pathname.replace(/^\/+/, '').toLowerCase();
-      if (VALID_TABS.includes(path as TabType)) {
-        setActiveTab(path as TabType);
-      } else {
-        setActiveTab('today');
-      }
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
-
-  // Update browser URL on tab switch
-  const handleSelectTab = (newTab: TabType) => {
-    setActiveTab(newTab);
-    const newPath = newTab === 'today' ? '/' : `/${newTab}`;
-    if (window.location.pathname !== newPath) {
-      window.history.pushState(null, '', newPath);
-    }
-  };
-
-  // 1. Subscribe to Firebase Auth
-  useEffect(() => {
-    const unsubscribe = subscribeToAuth((authUser) => {
-      setUser(authUser);
-      setAuthLoading(false);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // 2. Load only the authenticated user's stored days
-  useEffect(() => {
-    const stored = user ? loadAllDaysFromStorage(user.uid) : {};
-    setAllDays(stored);
-  }, [user]);
-
-  // 3. Load only the authenticated user's settings
-  useEffect(() => {
-    let isMounted = true;
-
-    if (!user) {
-      setSettings(DEFAULT_SETTINGS);
-      return () => {
-        isMounted = false;
-      };
-    }
-
-    loadUserSettings(user.uid).then((stored) => {
-      if (isMounted && stored) {
-        setSettings(stored);
-      }
-    });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [user]);
-
-  // 4. Load or subscribe to day record when selectedDate or user changes
-  useEffect(() => {
-    let isMounted = true;
-    isInitialLoadRef.current = true;
-
-    async function fetchDay() {
-      setSyncStatus('syncing');
-      try {
-        const record = await loadDayRecord(user ? user.uid : null, selectedDate, settings);
-        if (isMounted) {
-          setCurrentDay(record);
-          setAllDays((prev) => ({ ...prev, [selectedDate]: record }));
-          setSyncStatus('synced');
-          setLastSyncedAt(new Date().toLocaleTimeString());
-        }
-      } catch (err) {
-        console.error('Failed to load day record:', err);
-        if (isMounted) {
-          setSyncStatus('idle');
-        }
-      } finally {
-        if (isMounted) {
-          setTimeout(() => {
-            isInitialLoadRef.current = false;
-          }, 300);
-        }
-      }
-    }
-
-    fetchDay();
-
-    // Setup real-time listener if user is authenticated and Firestore is active
-    let unsubSnapshot: (() => void) | null = null;
-    if (user && isFirebaseConfigured) {
-      unsubSnapshot = subscribeToDayRecord(user.uid, selectedDate, (updated) => {
-        if (isMounted && updated) {
-          setCurrentDay(updated);
-          setAllDays((prev) => ({ ...prev, [selectedDate]: updated }));
-        }
-      });
-    }
-
-    return () => {
-      isMounted = false;
-      if (unsubSnapshot) unsubSnapshot();
-    };
-  }, [selectedDate, user, settings]);
-
-  // 5. Save updates to Day Record with debounce (Single Source of Truth)
-  const handleUpdateDay = useCallback(
-    (updatedDay: DayRecord): Promise<void> => {
-      const dayWithScore = {
-        ...updatedDay,
-        completionPercentage: calculateCompletionPercentage(updatedDay),
-        updatedAt: new Date().toISOString(),
-      };
-
-      setCurrentDay(dayWithScore);
-      setAllDays((prev) => ({ ...prev, [dayWithScore.date]: dayWithScore }));
-
-      // Update local sync status immediately
-      setSyncStatus('syncing');
-
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
-
-      return new Promise((resolve, reject) => {
-        saveTimeoutRef.current = setTimeout(async () => {
-          try {
-            await saveDayRecord(user ? user.uid : null, dayWithScore);
-            setSyncStatus('synced');
-            setLastSyncedAt(new Date().toLocaleTimeString());
-            resolve();
-          } catch (err) {
-            console.error('Error auto-saving day:', err);
-            setSyncStatus('error');
-            reject(err);
-          }
-        }, 600);
-      });
-    },
-    [user]
-  );
-
-  // 6. Switch Date (Preserves active tab or routes as directed)
-  const handleDateChange = (newDateStr: string, targetTab?: TabType) => {
-    setSelectedDate(newDateStr);
-    if (targetTab) {
-      handleSelectTab(targetTab);
-    }
-  };
-
-  // 7. Settings updates
-  const handleUpdateSettings = (newSettings: UserSettings) => {
-    setSettings(newSettings);
-    if (user) {
-      void saveUserSettings(user.uid, newSettings);
-    }
-  };
-
-  // 8. Backup Import
-  const handleImportBackup = (importedDays: Record<string, DayRecord>, importedSettings?: UserSettings) => {
-    setAllDays(importedDays);
-    Object.values(importedDays).forEach((day) => {
-      saveDayRecord(user ? user.uid : null, day);
-    });
-    if (importedSettings) {
-      handleUpdateSettings(importedSettings);
-    }
-    if (importedDays[selectedDate]) {
-      setCurrentDay(importedDays[selectedDate]);
-    }
-  };
-
-  // 9. Delete Account
-  const handleDeleteAccount = async () => {
-    if (user) {
-      const uid = user.uid;
-      await deleteUserData(uid);
-      clearUserLocalCache(uid);
-    }
-    setAllDays({});
-    const todayStr = getLocalDateId();
-    const freshDay = createDefaultDayRecord(todayStr, DEFAULT_SETTINGS);
-    setCurrentDay(freshDay);
-    setSettings(DEFAULT_SETTINGS);
-    handleSelectTab('today');
-  };
-
   return (
-    <div className="min-h-screen bg-[#090b10] text-zinc-100 flex flex-col md:flex-row antialiased selection:bg-zinc-700 selection:text-white">
-      {/* Navigation Sidebar (Desktop) / Mobile Bottom Bar */}
-      <Navigation
-        currentTab={activeTab}
-        onSelectTab={handleSelectTab}
-        user={user}
-        onSignIn={handleSignIn}
-        onSignOut={handleSignOut}
-        isSigningIn={isSigningIn}
-        authError={authError}
-        onClearAuthError={handleClearAuthError}
-        isSynced={syncStatus === 'synced'}
-        completionRate={currentDay.completionPercentage}
-      />
-
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Sticky Date Context Bar on dedicated views */}
-        <DateContextBar
-          selectedDate={selectedDate}
-          dayOfWeek={currentDay.dayOfWeek}
-          activeTab={activeTab}
-          syncStatus={syncStatus}
-          lastSyncedAt={lastSyncedAt}
-          onDateChange={(d) => handleDateChange(d)}
-          onNavigateTab={handleSelectTab}
+    <SmoothScrollProvider>
+      <div className="relative min-h-screen bg-[#0a0b0e] text-zinc-100 flex flex-col md:flex-row antialiased selection:bg-white/20 selection:text-white overflow-hidden">
+        {/* Custom Wallpaper or WebGL Fluid Shader */}
+        <FluidBackground
+          customWallpaper={settings.customWallpaper}
+          blur={settings.wallpaperBlur}
+          dim={settings.wallpaperDim}
         />
 
-        <main className="flex-1 overflow-y-auto pb-24 md:pb-8">
-          {/* 1. Today Command Center */}
-          {activeTab === 'today' && (
-            <TodayDashboard
-              day={currentDay}
-              onUpdateDay={handleUpdateDay}
-              onDateChange={(d) => handleDateChange(d)}
-              onNavigateTab={handleSelectTab}
-            />
-          )}
+        {/* Streamlined Navigation */}
+        <div className="relative z-30">
+          <Navigation
+            currentTab={activeTab}
+            onSelectTab={handleSelectTab}
+            user={user}
+            onSignIn={handleSignIn}
+            onSignOut={handleSignOut}
+            isSigningIn={isSigningIn}
+            authError={authError}
+            onClearAuthError={() => setAuthError(null)}
+            isSynced={syncStatus === 'synced'}
+            completionRate={currentDay.completionPercentage}
+          />
+        </div>
 
-          {/* 2. Academics Workspace */}
-          {activeTab === 'academics' && (
-            <AcademicsView
-              day={currentDay}
-              allDays={allDays}
-              onUpdateAcademics={(academics) =>
-                handleUpdateDay({ ...currentDay, academics })
-              }
-              onSelectDate={(d) => handleDateChange(d)}
-            />
-          )}
+        {/* Main Content Area */}
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative z-10">
+          <main className="flex-1 overflow-y-auto pb-24 md:pb-8">
+            {/* 1. Today Command Center */}
+            {activeTab === 'today' && (
+              <TodayDashboard
+                day={currentDay}
+                yesterday={yesterdayRecord}
+                onUpdateDay={handleUpdateDay}
+                onDateChange={(d) => setSelectedDate(d)}
+                onNavigateTab={handleSelectTab}
+              />
+            )}
 
-          {/* 3. DSA Workspace */}
-          {activeTab === 'dsa' && (
-            <DsaView
-              day={currentDay}
-              allDays={allDays}
-              onUpdateProblems={(dsa) => handleUpdateDay({ ...currentDay, dsa })}
-              onSelectDate={(d) => handleDateChange(d)}
-            />
-          )}
+            {/* 2. Unified Track Workspace */}
+            {['dsa', 'academics', 'workout', 'projects'].includes(activeTab) && (
+              <TrackView
+                day={currentDay}
+                onUpdateDay={handleUpdateDay}
+                initialSection={
+                  activeTab === 'academics'
+                    ? 'academics'
+                    : activeTab === 'workout'
+                    ? 'workout'
+                    : activeTab === 'projects'
+                    ? 'projects'
+                    : 'dsa'
+                }
+              />
+            )}
 
-          {/* 4. Workout Workspace */}
-          {activeTab === 'workout' && (
-            <WorkoutView
-              day={currentDay}
-              onUpdateWorkout={(workout) =>
-                handleUpdateDay({ ...currentDay, workout })
-              }
-            />
-          )}
+            {/* 3. Unified Insights & Review */}
+            {['review', 'calendar', 'history'].includes(activeTab) && (
+              <InsightsView
+                day={currentDay}
+                allDays={allDays}
+                onUpdateDay={handleUpdateDay}
+                onSelectDate={(d) => {
+                  setSelectedDate(d);
+                  handleSelectTab('today');
+                }}
+              />
+            )}
 
-          {/* 5. Projects Workspace */}
-          {activeTab === 'projects' && (
-            <ProjectsView
-              day={currentDay}
-              onUpdateProject={(project) =>
-                handleUpdateDay({ ...currentDay, project })
-              }
-              onUpdateSkills={(skills) =>
-                handleUpdateDay({ ...currentDay, skills })
-              }
-            />
-          )}
+            {/* 4. Settings */}
+            {activeTab === 'settings' && (
+              <SettingsView
+                user={user}
+                settings={settings}
+                allDays={allDays}
+                onSignOut={handleSignOut}
+                onSignIn={handleSignIn}
+                isSigningIn={isSigningIn}
+                authError={authError}
+                onClearAuthError={() => setAuthError(null)}
+                onUpdateSettings={handleUpdateSettings}
+                onImportBackup={(importedDays: Record<string, DayRecord>, importedSettings?: UserSettings) => {
+                  setAllDays(importedDays);
+                  Object.values(importedDays).forEach((day) => saveDayRecord(user ? user.uid : null, day));
+                  if (importedDays[selectedDate]) setCurrentDay(importedDays[selectedDate]);
+                  if (importedSettings) handleUpdateSettings(importedSettings);
+                }}
+                onDeleteAccount={async () => {
+                  if (user) {
+                    await deleteUserData(user.uid);
+                    clearUserLocalCache(user.uid);
+                  }
+                  setAllDays({});
+                  setCurrentDay(createDefaultDayRecord(selectedDate, DEFAULT_SETTINGS));
+                  handleSelectTab('today');
+                }}
+              />
+            )}
+          </main>
+        </div>
 
-          {/* 6. Schedule Workspace */}
-          {activeTab === 'schedule' && (
-            <ScheduleView
-              day={currentDay}
-              onUpdateSchedule={(schedule) =>
-                handleUpdateDay({ ...currentDay, schedule })
-              }
-            />
-          )}
+        {/* Floating AI Omni-logger */}
+        <AiChatBubble day={currentDay} onUpdateDay={handleUpdateDay} />
 
-          {/* 7. Daily Review Workspace */}
-          {activeTab === 'review' && (
-            <DailyReviewView
-              day={currentDay}
-              onUpdateReflection={(dailyReflection) =>
-                handleUpdateDay({ ...currentDay, dailyReflection })
-              }
-              onUpdateStats={(updates) =>
-                handleUpdateDay({ ...currentDay, ...updates })
-              }
-            />
-          )}
-
-          {/* 8. Calendar Dispatch */}
-          {activeTab === 'calendar' && (
-            <CalendarView
-              allDays={allDays}
-              onSelectDate={(d) => handleDateChange(d, 'today')}
-            />
-          )}
-
-          {/* 9. History Logs */}
-          {activeTab === 'history' && (
-            <HistoryView
-              allDays={allDays}
-              onSelectDate={(d) => handleDateChange(d, 'today')}
-            />
-          )}
-
-          {/* 10. Settings & Preferences */}
-          {activeTab === 'settings' && (
-            <SettingsView
-              user={user}
-              settings={settings}
-              allDays={allDays}
-              onSignOut={handleSignOut}
-              onSignIn={handleSignIn}
-              isSigningIn={isSigningIn}
-              authError={authError}
-              onClearAuthError={handleClearAuthError}
-              onUpdateSettings={handleUpdateSettings}
-              onImportBackup={handleImportBackup}
-              onDeleteAccount={handleDeleteAccount}
-            />
-          )}
-        </main>
+        {/* Multi-Agent Onboarding Calibration Modal (With Google Sign-in Linked) */}
+        {showOnboarding && (
+          <OnboardingModal
+            day={currentDay}
+            user={user}
+            onSignIn={handleSignIn}
+            isSigningIn={isSigningIn}
+            authError={authError}
+            onComplete={async (calibratedDay, generatedSystem: GeneratedSystemArchetype) => {
+              const nextSettings: UserSettings = {
+                ...settings,
+                defaultWorkoutMode: calibratedDay.workout.mode,
+                dailySystem: {
+                  workoutMode: calibratedDay.workout.mode,
+                  schedule: generatedSystem.schedule,
+                  habits: generatedSystem.habits,
+                  nonNegotiables: generatedSystem.nonNegotiables,
+                  workoutCycle: generatedSystem.workoutCycle,
+                  workoutExercises: generatedSystem.workoutExercises,
+                },
+              };
+              setSettings(nextSettings);
+              await persistSettings(nextSettings);
+              await handleUpdateDay(calibratedDay);
+              setShowOnboarding(false);
+            }}
+            onClose={() => setShowOnboarding(false)}
+          />
+        )}
       </div>
-    </div>
+    </SmoothScrollProvider>
   );
 }

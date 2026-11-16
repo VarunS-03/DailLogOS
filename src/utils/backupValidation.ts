@@ -5,11 +5,15 @@ import {
   DayRecord,
   DayStart,
   FocusSession,
+  HabitItem,
+  NonNegotiableItem,
   Outcome,
   RecoveryDecision,
+  ScheduleItem,
   TomorrowHandoff,
   UserSettings,
 } from '../types';
+import { getPrescribedSetCount } from './workout';
 
 export interface ValidationResult {
   valid: boolean;
@@ -47,6 +51,65 @@ function isShortString(value: unknown, maxLength: number, required = false): val
 
 function isTimestamp(value: unknown, required = true): value is string {
   return isShortString(value, 64, required);
+}
+
+function sanitizeDailySystem(value: unknown): UserSettings['dailySystem'] {
+  if (!isRecord(value)) return undefined;
+
+  const categories: ScheduleItem['category'][] = ['wake', 'academic', 'break', 'workout', 'dsa', 'project', 'reading', 'sleep', 'other'];
+  const schedule: ScheduleItem[] = (Array.isArray(value.schedule) ? value.schedule : []).slice(0, 12).map((item, index) => {
+    const raw = isRecord(item) ? item : {};
+    const category = categories.includes(raw.category as ScheduleItem['category']) ? raw.category as ScheduleItem['category'] : 'other';
+    return {
+      id: sanitizeString(raw.id, 50) || `schedule-${index}`,
+      time: sanitizeString(raw.time, 50) || 'Flexible',
+      title: sanitizeString(raw.title, 200) || 'Focus Session',
+      category,
+      status: 'pending',
+    };
+  });
+  const habits: HabitItem[] = (Array.isArray(value.habits) ? value.habits : []).slice(0, 4).map((item, index) => {
+    const raw = isRecord(item) ? item : {};
+    const timeOfDay = ['morning', 'anytime', 'evening'].includes(String(raw.timeOfDay))
+      ? raw.timeOfDay as HabitItem['timeOfDay']
+      : undefined;
+    return {
+      id: sanitizeString(raw.id, 50) || `habit-${index}`,
+      title: sanitizeString(raw.title, 200) || 'Daily habit',
+      detail: sanitizeString(raw.detail, 500),
+      completed: false,
+      timeOfDay,
+    };
+  });
+  const nonNegotiables: NonNegotiableItem[] = (Array.isArray(value.nonNegotiables) ? value.nonNegotiables : []).slice(0, 3).map((item, index) => {
+    const raw = isRecord(item) ? item : {};
+    return {
+      id: sanitizeString(raw.id, 50) || `non-negotiable-${index}`,
+      name: sanitizeString(raw.name, 200) || 'Daily commitment',
+      target: sanitizeString(raw.target, 200),
+      completed: false,
+    };
+  });
+  const workoutExercises = (Array.isArray(value.workoutExercises) ? value.workoutExercises : []).slice(0, 10).map((item) => {
+    const raw = isRecord(item) ? item : {};
+    const target = sanitizeString(raw.target, 100) || 'Flexible';
+    return {
+      name: sanitizeString(raw.name, 200) || 'Exercise',
+      target,
+      sets: sanitizeNumber(raw.sets, 1, 10, getPrescribedSetCount(target)),
+    };
+  });
+
+  if (!schedule.length || !habits.length || !nonNegotiables.length || !workoutExercises.length) return undefined;
+
+  return {
+    workoutMode: value.workoutMode === 'home' ? 'home' : 'gym',
+    schedule,
+    habits,
+    nonNegotiables,
+    workoutCycle: sanitizeString(value.workoutCycle, 200) || 'Personalized workout',
+    workoutExercises,
+  };
 }
 
 function validateBehavioralFields(rawDay: Record<string, unknown>): string | undefined {
@@ -246,18 +309,21 @@ export function validateAndSanitizeBackup(rawContent: string): ValidationResult 
           : 'not_started',
         notes: sanitizeString(rawDay.workout?.notes, 5000),
         exercises: Array.isArray(rawDay.workout?.exercises)
-          ? rawDay.workout.exercises.slice(0, 30).map((ex: any, idx: number) => ({
-              id: sanitizeString(ex?.id || `ex-${idx}`, 50),
-              name: sanitizeString(ex?.name, 200),
-              target: sanitizeString(ex?.target, 100),
-              completed: Boolean(ex?.completed),
-              skipped: Boolean(ex?.skipped),
-              sets: sanitizeNumber(ex?.sets, 1, 10, 3),
-              reps: sanitizeString(ex?.reps, 50),
-              weight: sanitizeString(ex?.weight, 50),
-              duration: sanitizeString(ex?.duration, 50),
-              notes: sanitizeString(ex?.notes, 1000),
-            }))
+          ? rawDay.workout.exercises.slice(0, 30).map((ex: any, idx: number) => {
+              const target = sanitizeString(ex?.target, 100);
+              return {
+                id: sanitizeString(ex?.id || `ex-${idx}`, 50),
+                name: sanitizeString(ex?.name, 200),
+                target,
+                completed: Boolean(ex?.completed),
+                skipped: Boolean(ex?.skipped),
+                sets: sanitizeNumber(ex?.sets, 1, 10, getPrescribedSetCount(target)),
+                reps: sanitizeString(ex?.reps, 50),
+                weight: sanitizeString(ex?.weight, 50),
+                duration: sanitizeString(ex?.duration, 50),
+                notes: sanitizeString(ex?.notes, 1000),
+              };
+            })
           : [],
         dailyNonNegotiables: Array.isArray(rawDay.workout?.dailyNonNegotiables)
           ? rawDay.workout.dailyNonNegotiables.slice(0, 20).map((nn: any, idx: number) => ({
@@ -302,9 +368,11 @@ export function validateAndSanitizeBackup(rawContent: string): ValidationResult 
   // Settings validation (optional)
   let sanitizedSettings: UserSettings | undefined;
   if (json.settings && typeof json.settings === 'object') {
+    const dailySystem = sanitizeDailySystem(json.settings.dailySystem);
     sanitizedSettings = {
       defaultWorkoutMode: json.settings.defaultWorkoutMode === 'home' ? 'home' : 'gym',
       academicSchedule: typeof json.settings.academicSchedule === 'object' ? json.settings.academicSchedule : {},
+      ...(dailySystem ? { dailySystem } : {}),
       theme: json.settings.theme === 'light' ? 'light' : 'dark',
       notificationsEnabled: Boolean(json.settings.notificationsEnabled),
     };

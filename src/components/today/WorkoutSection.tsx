@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Dumbbell, Flame, Check, FastForward, Plus, MessageSquare, Trash2, RotateCw } from 'lucide-react';
 import { WorkoutSession, WorkoutMode, ExerciseRecord } from '../../types';
 import { GYM_WORKOUT_PLANS, CALISTHENICS_WORKOUT_PLANS } from '../../constants/templates';
+import { getPrescribedSetCount } from '../../utils/workout';
 
 interface WorkoutSectionProps {
   workout: WorkoutSession;
@@ -14,7 +15,7 @@ export const WorkoutSection: React.FC<WorkoutSectionProps> = ({
 }) => {
   const [showAddCustom, setShowAddCustom] = useState(false);
   const [customName, setCustomName] = useState('');
-  const [customTarget, setCustomTarget] = useState('3 × 10');
+  const [customTarget, setCustomTarget] = useState('');
 
   const gymCycles = Object.keys(GYM_WORKOUT_PLANS);
   const calisthenicsCycles = Object.keys(CALISTHENICS_WORKOUT_PLANS);
@@ -36,7 +37,7 @@ export const WorkoutSection: React.FC<WorkoutSectionProps> = ({
       target: p.target,
       completed: false,
       skipped: false,
-      sets: 3,
+      sets: getPrescribedSetCount(p.target),
       reps: '',
       weight: '',
       duration: '',
@@ -64,7 +65,7 @@ export const WorkoutSection: React.FC<WorkoutSectionProps> = ({
       target: p.target,
       completed: false,
       skipped: false,
-      sets: 3,
+      sets: getPrescribedSetCount(p.target),
       reps: '',
       weight: '',
       duration: '',
@@ -112,10 +113,10 @@ export const WorkoutSection: React.FC<WorkoutSectionProps> = ({
     const newEx: ExerciseRecord = {
       id: `custom-ex-${Date.now()}`,
       name: customName.trim(),
-      target: customTarget.trim() || '3 × 10',
+      target: customTarget.trim() || 'Flexible',
       completed: false,
       skipped: false,
-      sets: 3,
+      sets: getPrescribedSetCount(customTarget),
       reps: '',
       weight: '',
       notes: '',
@@ -302,7 +303,7 @@ export const WorkoutSection: React.FC<WorkoutSectionProps> = ({
                       type="number"
                       min={1}
                       max={10}
-                      value={ex.sets || 3}
+                      value={ex.sets || getPrescribedSetCount(ex.target)}
                       onChange={(e) => updateExercise(ex.id, { sets: Number(e.target.value) })}
                       className="w-9 bg-transparent text-xs font-mono text-zinc-200 text-center focus:outline-hidden"
                     />

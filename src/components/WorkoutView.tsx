@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { WorkoutSession, WorkoutMode, ExerciseRecord, DayRecord } from '../types';
 import { GYM_WORKOUT_PLANS, CALISTHENICS_WORKOUT_PLANS } from '../constants/templates';
+import { getPrescribedSetCount } from '../utils/workout';
 
 interface WorkoutViewProps {
   day: DayRecord;
@@ -24,7 +25,7 @@ export const WorkoutView: React.FC<WorkoutViewProps> = ({ day, onUpdateWorkout }
   const workout = day.workout;
   const [showAddCustom, setShowAddCustom] = useState(false);
   const [customName, setCustomName] = useState('');
-  const [customTarget, setCustomTarget] = useState('3 × 10');
+  const [customTarget, setCustomTarget] = useState('');
 
   const gymCycles = Object.keys(GYM_WORKOUT_PLANS);
   const calisthenicsCycles = Object.keys(CALISTHENICS_WORKOUT_PLANS);
@@ -46,7 +47,7 @@ export const WorkoutView: React.FC<WorkoutViewProps> = ({ day, onUpdateWorkout }
       target: p.target,
       completed: false,
       skipped: false,
-      sets: 3,
+      sets: getPrescribedSetCount(p.target),
       reps: '',
       weight: '',
       duration: '',
@@ -75,7 +76,7 @@ export const WorkoutView: React.FC<WorkoutViewProps> = ({ day, onUpdateWorkout }
       target: p.target,
       completed: false,
       skipped: false,
-      sets: 3,
+      sets: getPrescribedSetCount(p.target),
       reps: '',
       weight: '',
       duration: '',
@@ -123,10 +124,10 @@ export const WorkoutView: React.FC<WorkoutViewProps> = ({ day, onUpdateWorkout }
     const newEx: ExerciseRecord = {
       id: `ex-custom-${Date.now()}`,
       name: customName.trim(),
-      target: customTarget.trim() || '3 × 10',
+      target: customTarget.trim() || 'Flexible',
       completed: false,
       skipped: false,
-      sets: 3,
+      sets: getPrescribedSetCount(customTarget),
       reps: '',
       weight: '',
       duration: '',
@@ -139,7 +140,7 @@ export const WorkoutView: React.FC<WorkoutViewProps> = ({ day, onUpdateWorkout }
     });
 
     setCustomName('');
-    setCustomTarget('3 × 10');
+    setCustomTarget('');
     setShowAddCustom(false);
   };
 
