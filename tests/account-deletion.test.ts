@@ -31,6 +31,7 @@ async function main() {
     deleteSyncState: async () => { events.push('sync-state'); },
     deleteSettings: async () => { events.push('settings'); },
     deleteOnboarding: async () => { events.push('onboarding'); },
+    deleteCoachChat: async () => { events.push('coach-chat'); },
     deleteProfile: async () => { events.push('profile'); },
     deleteAuthentication: async () => { events.push('auth'); },
   };
@@ -47,6 +48,7 @@ async function main() {
     'sync-state',
     'settings',
     'onboarding',
+    'coach-chat',
     'profile',
     'auth',
   ]);
@@ -91,6 +93,7 @@ async function main() {
     deleteSyncState: async () => { authRetryEvents.push('sync-state'); },
     deleteSettings: async () => { authRetryEvents.push('settings'); },
     deleteOnboarding: async () => { authRetryEvents.push('onboarding'); },
+    deleteCoachChat: async () => { authRetryEvents.push('coach-chat'); },
     deleteProfile: async () => { authRetryEvents.push('profile'); },
     deleteAuthentication: async () => {
       authRetryEvents.push('auth');
@@ -108,8 +111,8 @@ async function main() {
   });
   assert.equal(tombstoneStillPresent, true);
   await completeAccountDeletion(authRetryActions);
-  assert.deepEqual(authRetryEvents.slice(-9), [
-    'tombstone', 'outbox', 'cache', 'days', 'sync-state', 'settings', 'onboarding', 'profile', 'auth',
+  assert.deepEqual(authRetryEvents.slice(-10), [
+    'tombstone', 'outbox', 'cache', 'days', 'sync-state', 'settings', 'onboarding', 'coach-chat', 'profile', 'auth',
   ]);
   console.log('PASS: Auth deletion failure reports completed data cleanup and safely resumes with the tombstone retained.');
 }

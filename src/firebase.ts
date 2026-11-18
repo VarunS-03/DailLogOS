@@ -30,6 +30,7 @@ import {
   where,
   QueryConstraint,
   runTransaction,
+  writeBatch,
 } from 'firebase/firestore';
 import type { AppCheck } from 'firebase/app-check';
 import {
@@ -92,7 +93,7 @@ interface FirebaseConfig {
   storageBucket?: string;
   messagingSenderId?: string;
   appId?: string;
-  recaptchaSiteKey?: string;
+  recaptchaEnterpriseSiteKey?: string;
 }
 
 let firebaseApp: FirebaseApp | null = null;
@@ -285,9 +286,9 @@ function detectFirebaseConfig(): FirebaseConfig | null {
       import.meta.env.VITE_FIREBASE_APP_ID ||
       (typeof window !== 'undefined' && (window as unknown as { __ENV__?: Record<string, string> }).__ENV__?.VITE_FIREBASE_APP_ID);
 
-    const recaptchaSiteKey =
-      import.meta.env.VITE_FIREBASE_RECAPTCHA_SITE_KEY ||
-      (typeof window !== 'undefined' && (window as unknown as { __ENV__?: Record<string, string> }).__ENV__?.VITE_FIREBASE_RECAPTCHA_SITE_KEY);
+    const recaptchaEnterpriseSiteKey =
+      import.meta.env.VITE_FIREBASE_RECAPTCHA_ENTERPRISE_SITE_KEY ||
+      (typeof window !== 'undefined' && (window as unknown as { __ENV__?: Record<string, string> }).__ENV__?.VITE_FIREBASE_RECAPTCHA_ENTERPRISE_SITE_KEY);
 
     return {
       apiKey,
@@ -296,7 +297,7 @@ function detectFirebaseConfig(): FirebaseConfig | null {
       storageBucket,
       messagingSenderId,
       appId,
-      recaptchaSiteKey,
+      recaptchaEnterpriseSiteKey,
     };
   }
   return null;
@@ -318,10 +319,12 @@ if (config && config.apiKey && config.projectId) {
         (self as unknown as { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean }).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
       }
 
-      if (config.recaptchaSiteKey) {
-        appCheckInitialization = import('firebase/app-check').then(({ initializeAppCheck, ReCaptchaV3Provider }) => {
+      if (config.recaptchaEnterpriseSiteKey || import.meta.env.DEV) {
+        appCheckInitialization = import('firebase/app-check').then(({ initializeAppCheck, ReCaptchaEnterpriseProvider }) => {
           appCheckInstance = initializeAppCheck(firebaseApp!, {
-            provider: new ReCaptchaV3Provider(config.recaptchaSiteKey!),
+            // Debug mode intercepts provider requests in development, so a site key
+            // is only required for production attestation.
+            provider: new ReCaptchaEnterpriseProvider(config.recaptchaEnterpriseSiteKey || 'debug-only-site-key'),
             isTokenAutoRefreshEnabled: true,
           });
         }).catch((error: unknown) => {
@@ -340,7 +343,76 @@ if (config && config.apiKey && config.projectId) {
 export const auth = authInstance;
 export const db = firestoreInstance;
 export const appCheck = appCheckInstance;
+
+/** Returns the configured Firebase app only after App Check initialization settles. */
+export async function getFirebaseAiApp(): Promise<FirebaseApp> {
+  if (!firebaseApp || !isConfigured) {
+    throw new Error('Firebase is not configured for Firebase AI Logic.');
+  }
+  await appCheckInitialization;
+  if (!appCheckInstance) {
+    throw new Error('Firebase AI Logic requires App Check. Configure the reCAPTCHA Enterprise site key and App Check in Firebase.');
+  }
+  return firebaseApp;
+}
 export const isFirebaseConfigured = isConfigured;
+
+export interface CoachChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  createdAt: number;
+}
+
+function coachChatMessagesCollection(uid: string) {
+  if (!firestoreInstance || !authInstance?.currentUser || authInstance.currentUser.uid !== uid) {
+    throw new Error('Sign in to your own account to access Coach Chat history.');
+  }
+  return collection(firestoreInstance, 'users', uid, 'coachChats', 'main', 'messages');
+}
+
+export async function loadCoachChatHistory(uid: string): Promise<CoachChatMessage[]> {
+  const messages = coachChatMessagesCollection(uid);
+  const snapshot = await getDocs(query(messages, orderBy('sequence', 'desc'), limit(40)));
+  return snapshot.docs.map((message) => {
+    const data = message.data();
+    return {
+      id: message.id,
+      role: data.role as CoachChatMessage['role'],
+      text: data.text as string,
+      createdAt: data.sequence as number,
+    };
+  }).reverse();
+}
+
+export async function saveCoachChatMessages(uid: string, messages: CoachChatMessage[]): Promise<void> {
+  if (messages.length < 1 || messages.length > 2) throw new Error('Coach Chat saves one user and one assistant message at a time.');
+  const collectionRef = coachChatMessagesCollection(uid);
+  const batch = writeBatch(firestoreInstance!);
+  for (const message of messages) {
+    if (!['user', 'assistant'].includes(message.role) || !message.text.trim() || message.text.length > 4_000) {
+      throw new Error('Coach Chat message is invalid or too long.');
+    }
+    batch.set(doc(collectionRef, message.id), {
+      role: message.role,
+      text: message.text,
+      sequence: message.createdAt,
+      createdAt: serverTimestamp(),
+    });
+  }
+  await batch.commit();
+}
+
+export async function clearCoachChatHistory(uid: string): Promise<void> {
+  const messages = coachChatMessagesCollection(uid);
+  let page = await getDocs(query(messages, limit(200)));
+  while (!page.empty) {
+    const batch = writeBatch(firestoreInstance!);
+    page.docs.forEach((message) => batch.delete(message.ref));
+    await batch.commit();
+    page = await getDocs(query(messages, limit(200)));
+  }
+}
 
 export interface FirebaseAuthDiagnostics {
   isConfigured: boolean;
@@ -1251,6 +1323,14 @@ export async function deleteUserAccountAndData(uid: string): Promise<void> {
       },
       deleteSettings: () => deleteDoc(doc(database, 'users', uid, 'settings', 'main')),
       deleteOnboarding: () => deleteDoc(doc(database, 'users', uid, 'onboarding', 'main')),
+      deleteCoachChat: async () => {
+        const chatMessages = collection(database, 'users', uid, 'coachChats', 'main', 'messages');
+        let remainingMessages = await getDocsFromServer(query(chatMessages, limit(200)));
+        while (!remainingMessages.empty) {
+          await Promise.all(remainingMessages.docs.map((message) => deleteDoc(message.ref)));
+          remainingMessages = await getDocsFromServer(query(chatMessages, limit(200)));
+        }
+      },
       deleteProfile: async () => {
         const profileSnapshot = await getDocFromServer(userDocRef);
         if (profileSnapshot.exists()) await deleteDoc(userDocRef);

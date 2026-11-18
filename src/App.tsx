@@ -1199,6 +1199,7 @@ export default function App() {
               initiallyOpen={aiAssistantInitiallyOpen}
               onInitialOpenConsumed={() => setAiAssistantInitiallyOpen(false)}
               day={currentDay}
+              user={user}
               onUpdateDay={handleUpdateDay}
               settings={settings}
               onUpdateSettings={handleUpdateSettingsAndWait}

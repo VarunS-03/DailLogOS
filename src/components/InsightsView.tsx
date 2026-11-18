@@ -158,7 +158,7 @@ export const InsightsView: React.FC<InsightsViewProps> = ({
               </div>
               <h3 className="text-sm font-semibold text-white">Synthesize Day Without Typing Overhead</h3>
               <p className="text-xs text-zinc-400 mt-0.5">
-                Analyzes your completed blocks, DSA problems, and academic notes to write a cohesive reflection.
+                Uses Firebase AI Logic to summarize your completion, mood, energy, sleep, habits, focus sessions, completed blocks, and study activity. These selected details are sent to Google when you request a summary; no Gemini API key is needed for this action.
               </p>
             </div>
 

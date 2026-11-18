@@ -41,8 +41,10 @@ This checklist verifies the security posture of the DAILY OS application. Use th
 - [x] **Deletion lifecycle**: Creates an immutable Firestore tombstone, removes profile and user data, clears device cache, then requests Firebase Authentication deletion. Live Auth/recent-login behavior remains unverified.
 
 ## 6. App Check & Client Integrity
-- [x] **Optional client initialization**: Firebase App Check's reCAPTCHA v3 client initializes when `VITE_FIREBASE_RECAPTCHA_SITE_KEY` is configured; development debug tokens are limited to Vite development mode.
-- [ ] **Project-side enforcement**: Configure and verify App Check enforcement in the Firebase console for production services. Client initialization alone does not enforce requests; this has not been verified against a live project.
+- [x] **Optional client initialization**: Firebase App Check's reCAPTCHA Enterprise provider initializes when `VITE_FIREBASE_RECAPTCHA_ENTERPRISE_SITE_KEY` is configured; Vite development uses the App Check debug-token flow.
+- [x] **AI Logic token protection**: The daily reflection summary uses Firebase AI Logic and requests limited-use App Check tokens.
+- [x] **Private Coach Chat history**: Chat messages are stored under the authenticated user's UID, bounded by Firestore rules, and included in account deletion. Chat context/messages are sent to Google when the user sends a prompt.
+- [ ] **Project-side setup and enforcement**: Register the web app and Enterprise provider, then verify Firebase AI Logic App Check status in the Firebase Console. Live project configuration has not been inspected.
 
 ## 7. Error Handling & Information Leakage
 - [x] **Sanitized Error Logging**: `handleFirestoreError` prevents leaking PII, private thoughts, or sensitive internal paths into browser logs.

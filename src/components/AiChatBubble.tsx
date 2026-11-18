@@ -10,6 +10,7 @@ import {
   X,
   Terminal,
   KeyRound,
+  MessageCircle,
 } from 'lucide-react';
 import { hasGeminiKey, parseNaturalLanguageLog, NaturalInputParsed, setGeminiApiKey } from '../services/ai';
 import { reportAiFailure } from '../services/aiDiagnostics';
@@ -19,7 +20,8 @@ import {
   getSystemConfiguration,
   SYSTEM_MODULE_REGISTRY,
 } from '../services/systemConfiguration';
-import { DayRecord, DsaProblem, ScheduleItem, UserSettings, UserSystemConfiguration } from '../types';
+import { AuthUser, DayRecord, DsaProblem, ScheduleItem, UserSettings, UserSystemConfiguration } from '../types';
+import { CoachChatPanel } from './CoachChatPanel';
 
 interface PendingCustomizationProposal {
   result: AppCustomizationResult;
@@ -35,6 +37,7 @@ interface AiChatBubbleProps {
   day: DayRecord;
   onUpdateDay: (updatedDay: DayRecord, baseDay?: DayRecord) => Promise<void>;
   settings: UserSettings;
+  user: AuthUser | null;
   onUpdateSettings: (settings: UserSettings) => Promise<void>;
   initiallyOpen?: boolean;
   onInitialOpenConsumed?: () => void;
@@ -44,12 +47,13 @@ export const AiChatBubble: React.FC<AiChatBubbleProps> = ({
   day,
   onUpdateDay,
   settings,
+  user,
   onUpdateSettings,
   initiallyOpen = false,
   onInitialOpenConsumed,
 }) => {
   const [isOpen, setIsOpen] = useState(initiallyOpen);
-  const [mode, setMode] = useState<'customize' | 'log'>('customize');
+  const [mode, setMode] = useState<'coach' | 'customize' | 'log'>('coach');
   const [query, setQuery] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -242,7 +246,14 @@ export const AiChatBubble: React.FC<AiChatBubbleProps> = ({
             </button>
           </div>
 
-          <div className="grid grid-cols-2 gap-1 p-1 mb-3 rounded-lg bg-[#0a0c12] border border-[#232a3d]">
+          <div className="grid grid-cols-3 gap-1 p-1 mb-3 rounded-lg bg-[#0a0c12] border border-[#232a3d]">
+            <button
+              type="button"
+              onClick={() => { setMode('coach'); setFeedback(null); }}
+              className={`flex items-center justify-center gap-1 rounded-md py-1.5 text-[10px] ${mode === 'coach' ? 'bg-indigo-600/30 text-indigo-200' : 'text-zinc-400 hover:text-white'}`}
+            >
+              <MessageCircle className="h-3 w-3" /> Coach
+            </button>
             <button
               type="button"
               onClick={() => { setMode('customize'); setFeedback(null); }}
@@ -261,7 +272,9 @@ export const AiChatBubble: React.FC<AiChatBubbleProps> = ({
             </button>
           </div>
 
-          {mode === 'customize' ? (
+          {mode === 'coach' ? (
+            <CoachChatPanel user={user} day={day} settings={settings} />
+          ) : mode === 'customize' ? (
             <>
               <p className="text-[11px] text-zinc-300 mb-3 leading-relaxed">
                 Describe changes to your schedule, habits, workout, enabled modules, or dashboard order. For example: “Move my workout to 6 PM, add reading, and hide DSA Practice.”

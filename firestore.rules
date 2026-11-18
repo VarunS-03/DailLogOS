@@ -372,6 +372,25 @@ service cloud.firestore {
         allow delete: if isOwner(uid) && onboardingId == 'main';
       }
 
+      // Private, bounded Coach Chat messages; each message is stored separately
+      // so users can clear history and account deletion can remove it completely.
+      match /coachChats/{chatId}/messages/{messageId} {
+        allow read: if isOwner(uid) && chatId == 'main';
+        allow create: if isOwner(uid) && accountWritesAllowed(uid) && chatId == 'main' &&
+          request.resource.data.keys().hasOnly(['role', 'text', 'sequence', 'createdAt']) &&
+          request.resource.data.keys().hasAll(['role', 'text', 'sequence', 'createdAt']) &&
+          request.resource.data.role in ['user', 'assistant'] &&
+          request.resource.data.text is string &&
+          request.resource.data.text.size() > 0 &&
+          request.resource.data.text.size() <= 4000 &&
+          request.resource.data.sequence is int &&
+          request.resource.data.sequence >= 0 &&
+          request.resource.data.sequence <= 4102444800000 &&
+          request.resource.data.createdAt == request.time;
+        allow update: if false;
+        allow delete: if isOwner(uid) && chatId == 'main';
+      }
+
       // User Daily Records Subcollection (/users/{uid}/days/{dateId})
       match /days/{dateId} {
         allow read: if isOwner(uid) && isValidDateId(dateId);

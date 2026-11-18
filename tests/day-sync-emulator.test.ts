@@ -75,6 +75,17 @@ async function main() {
     const anonymous = environment.unauthenticatedContext().firestore();
     await assert.rejects(getDoc(doc(anonymous, 'users', uid, 'settings', 'main')));
     console.log('PASS (Firestore Emulator): Owner access works while anonymous, cross-user, unknown-path, and invalid-settings access is denied.');
+    const coachMessageRef = doc(database, 'users', uid, 'coachChats', 'main', 'messages', 'message-1');
+    await setDoc(coachMessageRef, {
+      role: 'user', text: 'Help me make a realistic plan.', sequence: Date.now(), createdAt: serverTimestamp(),
+    });
+    assert.equal((await getDoc(coachMessageRef)).exists(), true);
+    await assert.rejects(getDoc(doc(otherDatabase, 'users', uid, 'coachChats', 'main', 'messages', 'message-1')));
+    await assert.rejects(setDoc(doc(database, 'users', uid, 'coachChats', 'main', 'messages', 'oversized'), {
+      role: 'user', text: 'x'.repeat(4001), sequence: Date.now(), createdAt: serverTimestamp(),
+    }));
+    await assert.rejects(updateDoc(coachMessageRef, { text: 'Edited history' }));
+    console.log('PASS (Firestore Emulator): Coach chat messages are owner-only, bounded, and immutable.');
     const date = '2026-10-11';
     const base = { ...createDefaultDayRecord(date, DEFAULT_SETTINGS), syncRevision: 0 };
     await seedRecord(environment, uid, base);

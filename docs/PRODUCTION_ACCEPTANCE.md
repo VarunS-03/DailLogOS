@@ -1,4 +1,4 @@
-﻿# Daily OS Production Acceptance
+# Daily OS Production Acceptance
 
 **Assessment date:** 2026-11-18
 **Overall status: NOT READY â€” live project and release checks are unverified.**
@@ -10,7 +10,7 @@ This report distinguishes source review and automated checks from actual Firebas
 - Authenticated profiles, settings, onboarding, and dated records use UID-scoped Firestore paths. Day edits use a durable local outbox and conflict/recovery states; Firestore rules require sync-state commits and deny writes after an account-deletion tombstone is created.
 - Account deletion writes an immutable `/accountDeletionTombstones/{uid}` record, removes user data/profile, then requests Firebase Authentication deletion. A recent authenticated session may be required for the final Auth step.
 - Backup files are plaintext JSON containing day records and settings. Imports are bounded to 5 MiB and 1,000 records and validated against allowed fields and value limits. Merge is supported; Replace is limited to guest data. Applying day records and settings is not atomic.
-- Gemini features run from the browser. Responses are schema-validated before use. User-entered keys are stored in browser local storage; a `VITE_GEMINI_API_KEY` is bundled client-side. Prompt context is sent to Google when a request runs.
+- Existing Gemini features run from the browser and use the user-configured Google AI Studio key; those keys remain in browser local storage or are client-visible when configured through Vite. The user-triggered daily reflection summary and signed-in Coach Chat use Firebase AI Logic without a Gemini API key, with limited-use App Check tokens. Only selected user context and the current prompt/history are sent when the user requests a chat reply.
 - Track, Insights, and Settings are lazy-loaded. Three.js and the Gemini SDK are dynamically loaded. The build still reports large chunks; history loads all pages and has no total cap.
 
 ## Acceptance classification
@@ -32,7 +32,7 @@ This report distinguishes source review and automated checks from actual Firebas
 
 - `firestore.rules` is deny-by-default and validates owner-scoped user data. Deploy the tombstone-capable rules before shipping a client that begins account deletion with this lifecycle.
 - Firebase web configuration and any Vite-prefixed environment variable are client-visible. Do not place service-account credentials or server secrets in the frontend build.
-- App Check client initialization is optional. Production enforcement must be configured and verified in Firebase Console.
+- App Check initializes with the reCAPTCHA Enterprise provider when `VITE_FIREBASE_RECAPTCHA_ENTERPRISE_SITE_KEY` is configured, or uses the debug-token flow in Vite development. Firebase AI Logic requests fail over to local reflection defaults if App Check is unavailable. Register the production web app/provider and verify Firebase AI Logic enforcement in Firebase Console.
 - `.env` is ignored by Git and `.env.example` is a placeholder template. The emulator runner removes debug flags and secret-like variables from the Firebase CLI child environment; a regression test covers this. An earlier verbose emulator run exposed the `STITCH_API_KEY` environment value in tool output. Rotate that key in its owning provider; no credential rotation was performed here.
 - The reviewed tracked frontend/config/docs did not contain service-account private-key material. Do not treat that scan as proof that runtime secrets are secure.
 - Backups are unencrypted. Users should store exported files accordingly; the application makes no encryption-at-rest claim.
@@ -77,7 +77,7 @@ This addendum supersedes earlier statements above that Insights startup loads al
 - Startup defers onboarding, AI chat, and configured App Check SDK code; Three.js and Gemini remain deferred. Vite still reports large chunks and no physical-device performance run was performed.
 - AI/provider failures use sanitized diagnostics. Account deletion reports stage-aware, retryable outcomes. Emulator launch strips debug and secret-like environment values, with a sentinel-output regression test.
 - A `STITCH_API_KEY` value appeared in an earlier Firebase CLI debug environment dump. It was not found in Git history or a repository log during the scan. The owner must manually revoke/delete that key and create a replacement in Stitch Settings, then update the secure local secret and reconnect. No rotation was performed. Provider guidance: [Google AI Developers Forum](https://discuss.ai.google.dev/t/stitch-api-keys-disappeared-and-unable-to-recreate/143076).
-- Before frontend release, deploy the tombstone-capable rules to the intended project (`firebase deploy --only firestore:rules --project <project-id>`), configure/verify reCAPTCHA Enterprise App Check in Firebase Console, and only then consider enforcement for Authentication and Cloud Firestore after reviewing metrics. No project was accessed or deployment performed. See [App Check setup](https://firebase.google.com/docs/app-check/web/recaptcha-provider?hl=en), [enforcement](https://firebase.google.com/docs/app-check/enable-enforcement?hl=en), and [rules deployment](https://firebase.google.com/docs/rules/manage-deploy).
+- Before frontend release, deploy the updated tombstone- and Coach Chat-capable rules to the intended project (`firebase deploy --only firestore:rules --project <project-id>`), configure/verify reCAPTCHA Enterprise App Check in Firebase Console, and only then consider enforcement for Authentication and Cloud Firestore after reviewing metrics. Firebase AI Logic was provisioned for the configured project, and the Firestore database edition was inspected; no rules or application deployment was performed. App Check Console settings remain unverified. See [App Check setup](https://firebase.google.com/docs/app-check/web/recaptcha-provider?hl=en), [enforcement](https://firebase.google.com/docs/app-check/enable-enforcement?hl=en), and [rules deployment](https://firebase.google.com/docs/rules/manage-deploy).
 - Browser/Auth, live App Check, Gemini provider, account deletion, cross-device, file export/import, accessibility, and mobile acceptance rows are all BLOCKED / NOT RUN in the checklist. These external/manual gates keep the release NOT READY.
 
 ### Phase 17 final local validation
@@ -93,5 +93,17 @@ This addendum supersedes earlier statements above that Insights startup loads al
 | `npm audit` | PASS WITH LIMITATIONS â€” 4 high dev-toolchain findings; no safe patched version found; forced proposal downgrades Vite |
 | `git diff --check` | PASS â€” no whitespace errors; Git reports LF-to-CRLF notices |
 | Credential-pattern scan | PASS â€” no matching files in available Git history/current tree; exposed Stitch key still requires manual rotation |
+
+### Firebase AI Logic Coach Chat verification
+
+**Assessment date:** 2026-11-18
+
+| Check | Result |
+|---|---|
+| `npm run lint` | PASS |
+| `npm test` | PASS, including Coach Chat rule-model and account-deletion coverage |
+| `npm run test:firestore-emulator` | PASS on an available local port; owner-only, bounded, immutable Coach Chat messages verified |
+| `npm run build` | PASS; Vite large-chunk warning remains |
+| Live AI response / production App Check | NOT RUN; Console registration and site-key configuration remain external release gates |
 
 The Firestore Emulator's negative assertions intentionally emit permission-denied logs. The emulator runner shut down successfully. A zero-byte emulator debug log was removed.

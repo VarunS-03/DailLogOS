@@ -186,6 +186,22 @@ export class FirestoreRulesEvaluator {
       return { allowed: false, reason: 'UNAUTHORIZED: request.auth.uid != path.uid' };
     }
 
+    // Path: /users/{uid}/coachChats/main/messages/{messageId}
+    if (segments.length === 6 && segments[2] === 'coachChats' && segments[3] === 'main' && segments[4] === 'messages') {
+      if (operation === 'read' || operation === 'delete') return { allowed: true };
+      if (operation !== 'create') return { allowed: false, reason: 'COACH_CHAT: updates are disabled' };
+      const data = requestData || {};
+      const allowedKeys = ['role', 'text', 'sequence', 'createdAt'];
+      if (Object.keys(data).length !== allowedKeys.length || Object.keys(data).some((key) => !allowedKeys.includes(key))) {
+        return { allowed: false, reason: 'COACH_CHAT: unexpected fields' };
+      }
+      if (!['user', 'assistant'].includes(data.role) || typeof data.text !== 'string' || data.text.length < 1 || data.text.length > 4000
+        || !Number.isInteger(data.sequence) || data.sequence < 0 || data.sequence > 4102444800000) {
+        return { allowed: false, reason: 'COACH_CHAT: invalid message' };
+      }
+      return { allowed: true };
+    }
+
     // Path 1: /users/{uid}
     if (segments.length === 2) {
       if (operation === 'read' || operation === 'delete') {
@@ -701,6 +717,26 @@ function runSecurityTests() {
       answers: validAnswers,
       requirements: validRequirements,
       systemConfiguration: validSystemConfiguration,
+    })
+  );
+
+  assertRule(
+    '28. Owner can save bounded coach chat messages',
+    true,
+    FirestoreRulesEvaluator.evaluate('users/user_alice_123/coachChats/main/messages/message-1', 'create', userA, undefined, {
+      role: 'user', text: 'Help me plan a focused afternoon.', sequence: Date.now(), createdAt: new Date(),
+    })
+  );
+  assertRule(
+    '29. Another user cannot read coach chat messages',
+    false,
+    FirestoreRulesEvaluator.evaluate('users/user_alice_123/coachChats/main/messages/message-1', 'read', userB)
+  );
+  assertRule(
+    '30. Coach chat message size is bounded',
+    false,
+    FirestoreRulesEvaluator.evaluate('users/user_alice_123/coachChats/main/messages/message-2', 'create', userA, undefined, {
+      role: 'user', text: 'x'.repeat(4001), sequence: Date.now(), createdAt: new Date(),
     })
   );
 

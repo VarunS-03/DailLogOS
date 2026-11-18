@@ -46,10 +46,11 @@ We assume a zero-trust model where an attacker can:
 - Day and settings cache keys are scoped by user ID. Sign-out removes the current user's day and settings cache keys. Guest data and the separately stored Gemini key are not user-scoped and remain in the browser.
 - Account deletion writes an immutable Firestore tombstone, blocks further writes, removes account documents and local UID-scoped data, then deletes the Firebase Authentication user. The tombstone remains to reject stale clients. If cleanup is interrupted, deletion stays blocked and can be retried.
 ### E. App Check & Client Integrity
-- **Optional Firebase App Check client initialization**:
-  - The client initializes `ReCaptchaV3Provider` only when `VITE_FIREBASE_RECAPTCHA_SITE_KEY` is configured. Initialization failures are logged without exposing the key.
-  - A development debug token is enabled only in Vite development mode.
-  - Client initialization does not enforce App Check by itself. Configure and verify enforcement for the relevant Firebase services in the Firebase console before production deployment; this repository has not validated a live project's enforcement settings.
+- **Firebase App Check and Firebase AI Logic**:
+  - The client initializes `ReCaptchaEnterpriseProvider` when `VITE_FIREBASE_RECAPTCHA_ENTERPRISE_SITE_KEY` is configured. In Vite development builds it uses the App Check debug-token flow instead. Keep the Enterprise site key public/client-side and its secret in the Firebase Console.
+  - The user-triggered daily reflection summary and signed-in Coach Chat use Firebase AI Logic with limited-use App Check tokens. Auto-Fill falls back locally if App Check is unavailable; Coach Chat shows a retryable error.
+  - Coach Chat sends the current message, selected current-day progress, configured user goals/preferences, and recent conversation history to Google. Saved history is owner-scoped in Firestore and cleared during account deletion.
+  - Client initialization does not configure project-side enforcement or register an attestation provider. Configure the web app and verify Firebase AI Logic App Check in the Firebase Console before production use. This repository has not inspected the live project settings.
 
 ### F. Privacy-Preserving Error Handling
 - **Sanitized Error Messaging**:

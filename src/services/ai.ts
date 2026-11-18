@@ -273,72 +273,44 @@ Return ONLY valid JSON matching this schema without markdown code blocks:
  * workout, DSA problems, and academic notes, removing blank-page paralysis.
  */
 export async function generateAutoReflection(day: DayRecord): Promise<Partial<DailyReflection>> {
-  const completedSchedule = day.schedule?.filter((s) => s.status === 'completed').map((s) => s.title).join(', ') || 'Various schedule blocks';
-  const dsaCount = day.dsa?.length || 0;
-  const dsaNames = day.dsa?.map((d) => d.problem).join(', ') || '';
-  const workoutDone = day.workout?.status === 'completed';
-  const academicSubject = day.academics?.subject || 'Academics';
-
-  const ai = await getAiClient();
-
-  if (!ai) {
-    // Intelligent heuristic synthesis
-    return {
-      academicLearned: day.academics?.learned || (day.academics?.objective ? `Covered core tenets of ${day.academics.objective}.` : `Focused review on ${academicSubject}.`),
-      academicRetrieve: day.academics?.retrieve || `Active recall completed for key concepts in ${academicSubject}.`,
-      academicWeak: day.academics?.weak || 'Edge cases and speed of synthesis require repetition.',
-      dsaProblem: dsaNames || (dsaCount > 0 ? `${dsaCount} problem(s) reviewed` : 'Core algorithm pattern practice'),
-      dsaPattern: day.dsa?.[0]?.pattern || 'Two Pointers / Hash Map / DP',
-      dsaInsight: day.dsa?.[0]?.insight || 'Careful index boundary checking prevents off-by-one errors.',
-      dsaMistake: day.dsa?.[0]?.failureMistake || 'Avoid premature optimization before validating the brute-force baseline.',
-      projectArtifact: day.project?.artifact || day.project?.goal || 'Consistent step forward on active build.',
-      tomorrowFirstAction: day.tomorrowFirstAction || '06:00 AM — Open first academic module with zero phone friction',
-      notes: `Solid day with ${day.completionPercentage}% completion. Maintained focus across ${completedSchedule || 'daily commitments'}. ${workoutDone ? 'Workout session finished strong.' : ''}`,
-    };
-  }
+  const completedSchedule = day.schedule?.filter((item) => item.status === 'completed').map((item) => item.title).join(', ') || 'No completed schedule blocks recorded';
+  const dsaNames = day.dsa?.map((problem) => problem.problem).filter(Boolean).join(', ') || 'None recorded';
+  const academicSubject = day.academics?.subject || 'None recorded';
+  const fallback: Partial<DailyReflection> = {
+    academicLearned: day.academics?.learned || (day.academics?.objective ? `Covered core tenets of ${day.academics.objective}.` : `Focused review on ${academicSubject}.`),
+    academicRetrieve: day.academics?.retrieve || `Active recall completed for key concepts in ${academicSubject}.`,
+    academicWeak: day.academics?.weak || 'Edge cases and speed of synthesis require repetition.',
+    dsaProblem: dsaNames,
+    dsaPattern: day.dsa?.[0]?.pattern || 'No specific pattern recorded',
+    dsaInsight: day.dsa?.[0]?.insight || 'Use a small example to check assumptions before optimizing.',
+    dsaMistake: day.dsa?.[0]?.failureMistake || 'Review edge cases before finalizing a solution.',
+    projectArtifact: day.project?.artifact || day.project?.goal || 'Consistent step forward on active build.',
+    tomorrowFirstAction: day.tomorrowFirstAction || 'Choose one clear first action for tomorrow.',
+    notes: `Day completion: ${day.completionPercentage}%. Completed schedule: ${completedSchedule}.`,
+  };
 
   try {
-    const prompt = `You are an AI assistant in Daily OS. Synthesize the user's daily activity into an insightful, structured reflection draft.
-
-Data for date: ${day.date} (${day.dayOfWeek})
-Completion rate: ${day.completionPercentage}%
-Schedule completed: ${completedSchedule}
-Academic Subject: ${academicSubject}
-Academic notes: ${day.academics?.learned || 'None'}
-DSA Problems (${dsaCount}): ${dsaNames}
-Workout cycle: ${day.workout?.cycleDay} (Status: ${day.workout?.status})
-Mood: ${day.mood}/5, Energy: ${day.energy}/5, Sleep: ${day.sleep}/5
-
-Return ONLY valid JSON with these keys without markdown code blocks:
-{
-  "academicLearned": "Synthesized 1-2 sentence core learning",
-  "academicRetrieve": "Key principle or formula to recall",
-  "academicWeak": "One identified friction or weak area",
-  "dsaProblem": "Primary problem name or topic reviewed",
-  "dsaPattern": "Recognized algorithmic pattern",
-  "dsaInsight": "Key algorithmic or structural insight",
-  "dsaMistake": "Common trap or oversight avoided/encountered",
-  "projectArtifact": "Tangible progress or output achieved",
-  "tomorrowFirstAction": "Actionable, precise first step for tomorrow morning",
-  "notes": "Holistic, constructive reflection on discipline and energy management today"
-}`;
-
-    const response = await waitForAiResponse(ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: { responseMimeType: 'application/json' },
-    }));
-
-    return parseAutoReflectionResponse(response.text || '');
-  } catch (err) {
-    reportAiFailure('reflection', err);
-    return {
-      tomorrowFirstAction: 'Review top objective with fresh mind in the morning block',
-      notes: `Finished today with ${day.completionPercentage}% completion. Continuous consistency over intensity.`,
+    const dailyLogs = {
+      date: day.date,
+      dayOfWeek: day.dayOfWeek,
+      completionPercentage: day.completionPercentage,
+      mood: day.mood,
+      energy: day.energy,
+      sleep: day.sleep,
+      completedSchedule: day.schedule?.filter((item) => item.status === 'completed').map(({ time, title }) => ({ time, title })) || [],
+      habits: day.habits?.map(({ title, completed }) => ({ title, completed })) || [],
+      focusSessions: day.focusSessions,
+      academicSubject: day.academics?.subject,
+      dsaProblems: day.dsa?.map(({ problem, pattern }) => ({ problem, pattern })) || [],
+      workout: { cycleDay: day.workout?.cycleDay, status: day.workout?.status },
     };
+    const { generateDailySummary } = await import('./firebaseAi');
+    return { ...fallback, notes: await generateDailySummary(JSON.stringify(dailyLogs)) };
+  } catch (error) {
+    reportAiFailure('reflection', error);
+    return fallback;
   }
 }
-
 /**
  * Intelligent DSA Coach: Given a problem title or prompt, recommends pattern, hints,
  * algorithmic approach, and common pitfalls without spoiling the entire solution immediately.

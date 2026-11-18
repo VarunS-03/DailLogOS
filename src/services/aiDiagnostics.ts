@@ -6,6 +6,7 @@ export type AiOperation =
   | 'quick log parsing'
   | 'customization proposal'
   | 'customization save'
+  | 'coach chat'
   | 'onboarding save';
 
 type SafeLogger = (message: string) => void;

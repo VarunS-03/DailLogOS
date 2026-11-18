@@ -6,6 +6,7 @@ export interface AccountDeletionActions {
   deleteSyncState: () => Promise<void>;
   deleteSettings: () => Promise<void>;
   deleteOnboarding: () => Promise<void>;
+  deleteCoachChat: () => Promise<void>;
   deleteProfile: () => Promise<void>;
   deleteAuthentication: () => Promise<void>;
 }
@@ -35,6 +36,7 @@ export async function completeAccountDeletion(actions: AccountDeletionActions): 
     ['sync metadata cleanup', actions.deleteSyncState],
     ['settings cleanup', actions.deleteSettings],
     ['onboarding cleanup', actions.deleteOnboarding],
+    ['coach chat cleanup', actions.deleteCoachChat],
     ['profile cleanup', actions.deleteProfile],
     ['Firebase Authentication deletion', actions.deleteAuthentication],
   ];
