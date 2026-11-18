@@ -16,7 +16,7 @@ import {
   BookOpen,
   Code2,
 } from 'lucide-react';
-import { AuthErrorInfo, AuthUser, TabType } from '../types';
+import { AuthErrorInfo, AuthUser, SystemModuleId, SyncStatus, TabType } from '../types';
 
 interface NavigationProps {
   currentTab: TabType;
@@ -24,11 +24,12 @@ interface NavigationProps {
   user: AuthUser | null;
   onSignOut: () => void;
   onSignIn: () => void;
-  isSynced: boolean;
+  syncStatus: SyncStatus;
   completionRate: number;
   isSigningIn?: boolean;
   authError?: AuthErrorInfo | string | null;
   onClearAuthError?: () => void;
+  enabledModules: SystemModuleId[];
 }
 
 export const Navigation: React.FC<NavigationProps> = ({
@@ -37,18 +38,49 @@ export const Navigation: React.FC<NavigationProps> = ({
   user,
   onSignOut,
   onSignIn,
-  isSynced,
+  syncStatus,
   completionRate,
   isSigningIn = false,
   authError = null,
   onClearAuthError,
+  enabledModules,
 }) => {
   const [copiedHostname, setCopiedHostname] = useState(false);
+  const syncStatusLabel: Record<SyncStatus, string> = {
+    idle: user ? 'Sync status unknown' : 'Saved on device',
+    pending: 'Saved locally',
+    syncing: 'Syncing',
+    offline: 'Waiting for connection',
+    conflict: 'Conflict needs review',
+    synced: user ? 'Cloud synced' : 'Saved on device',
+    error: 'Sync failed',
+  };
+  const syncStatusColor: Record<SyncStatus, string> = {
+    idle: 'bg-zinc-500',
+    pending: 'bg-amber-400',
+    syncing: 'bg-amber-400',
+    offline: 'bg-amber-400',
+    conflict: 'bg-red-400',
+    synced: 'bg-emerald-400',
+    error: 'bg-red-400',
+  };
+  const trackModules: Array<SystemModuleId> = ['dsa', 'academics', 'workout', 'projects'];
+  const firstEnabledTrackModule = trackModules.find((module) => enabledModules.includes(module));
 
   const mainTabs = [
     { id: 'today' as TabType, label: 'Today', icon: LayoutDashboard },
-    { id: 'dsa' as TabType, label: 'Track Work', icon: Layers, activeMatch: ['dsa', 'academics', 'workout', 'projects'] },
-    { id: 'review' as TabType, label: 'Insights & Review', icon: Moon, activeMatch: ['review', 'calendar', 'history'] },
+    ...(firstEnabledTrackModule ? [{
+      id: firstEnabledTrackModule as TabType,
+      label: 'Track Work',
+      icon: Layers,
+      activeMatch: trackModules as TabType[],
+    }] : []),
+    ...(enabledModules.includes('insights') ? [{
+      id: 'review' as TabType,
+      label: 'Insights & Review',
+      icon: Moon,
+      activeMatch: ['review', 'calendar', 'history'],
+    }] : []),
     { id: 'settings' as TabType, label: 'Settings', icon: Settings },
   ];
 
@@ -74,9 +106,9 @@ export const Navigation: React.FC<NavigationProps> = ({
             <div>
               <h1 className="text-sm font-bold text-white tracking-wider font-mono">DAILY OS</h1>
               <div className="flex items-center gap-1.5 mt-0.5">
-                <span className={`w-1.5 h-1.5 rounded-full ${isSynced ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+                <span className={`w-1.5 h-1.5 rounded-full ${syncStatusColor[syncStatus]}`} />
                 <span className="text-[10px] text-zinc-400 font-mono">
-                  {isSynced ? 'Cloud Synced' : 'Syncing'}
+                  {syncStatusLabel[syncStatus]}
                 </span>
               </div>
             </div>

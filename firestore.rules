@@ -22,6 +22,20 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == uid;
     }
 
+    function accountWritesAllowed(uid) {
+      let accountPath = /databases/$(database)/documents/users/$(uid);
+      let tombstonePath = /databases/$(database)/documents/accountDeletionTombstones/$(uid);
+      return !exists(tombstonePath) &&
+             (!exists(accountPath) || get(accountPath).data.get('deletionInProgress', false) != true);
+    }
+
+    function hasCurrentDaySyncState(uid, dateId, revision) {
+      let statePath = /databases/$(database)/documents/users/$(uid)/daySyncState/$(dateId);
+      return existsAfter(statePath) &&
+             getAfter(statePath).data.revision == revision &&
+             getAfter(statePath).data.committedAt == request.time;
+    }
+
     // Validates strict ISO 8601 calendar date format (YYYY-MM-DD)
     function isValidDateId(dateId) {
       return dateId is string &&
@@ -34,10 +48,13 @@ service cloud.firestore {
 
     // User Profile Validator (/users/{uid})
     function isValidUserProfile(data, uid) {
-      return (!('uid' in data) || data.uid == uid) &&
+      return data.keys().hasOnly(['uid', 'email', 'displayName', 'photoURL', 'createdAt', 'updatedAt']) &&
+             (!('uid' in data) || data.uid == uid) &&
              (!('email' in data) || (data.email is string && data.email.size() <= 256)) &&
              (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 128)) &&
-             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 1024));
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 1024)) &&
+             (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
+             (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
     }
 
     // User Settings Validator (/users/{uid}/settings/{settingId})
@@ -45,7 +62,178 @@ service cloud.firestore {
       return (!('defaultWorkoutMode' in data) || data.defaultWorkoutMode in ['gym', 'home']) &&
              (!('theme' in data) || data.theme in ['dark', 'light']) &&
              (!('academicSchedule' in data) || data.academicSchedule is map) &&
-             (!('notificationsEnabled' in data) || data.notificationsEnabled is bool);
+             (!('notificationsEnabled' in data) || data.notificationsEnabled is bool) &&
+             (!('systemConfiguration' in data) || isValidSystemConfiguration(data.systemConfiguration));
+    }
+
+    function isValidSystemModuleList(value) {
+      return value is list && value.size() <= 5 &&
+             (value.size() < 1 || value[0] in ['academics', 'dsa', 'workout', 'projects', 'insights']) &&
+             (value.size() < 2 || value[1] in ['academics', 'dsa', 'workout', 'projects', 'insights']) &&
+             (value.size() < 3 || value[2] in ['academics', 'dsa', 'workout', 'projects', 'insights']) &&
+             (value.size() < 4 || value[3] in ['academics', 'dsa', 'workout', 'projects', 'insights']) &&
+             (value.size() < 5 || value[4] in ['academics', 'dsa', 'workout', 'projects', 'insights']);
+    }
+
+    function isValidDashboardWidgetList(value) {
+      return value is list && value.size() <= 6 &&
+             (value.size() < 1 || value[0] in ['briefing', 'commitments', 'schedule', 'workspaces', 'goals', 'custom_trackers']) &&
+             (value.size() < 2 || value[1] in ['briefing', 'commitments', 'schedule', 'workspaces', 'goals', 'custom_trackers']) &&
+             (value.size() < 3 || value[2] in ['briefing', 'commitments', 'schedule', 'workspaces', 'goals', 'custom_trackers']) &&
+             (value.size() < 4 || value[3] in ['briefing', 'commitments', 'schedule', 'workspaces', 'goals', 'custom_trackers']) &&
+             (value.size() < 5 || value[4] in ['briefing', 'commitments', 'schedule', 'workspaces', 'goals', 'custom_trackers']) &&
+             (value.size() < 6 || value[5] in ['briefing', 'commitments', 'schedule', 'workspaces', 'goals', 'custom_trackers']);
+    }
+
+    function isValidCustomTracker(value) {
+      return value is map &&
+             value.keys().hasOnly(['id', 'name', 'unit', 'dailyTarget']) &&
+             value.keys().hasAll(['id', 'name', 'unit']) &&
+             value.id is string && value.id.matches('^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$') &&
+             value.name is string && value.name.size() > 0 && value.name.size() <= 50 &&
+             value.unit is string && value.unit.size() <= 20 &&
+             (!('dailyTarget' in value) || (value.dailyTarget is number && value.dailyTarget >= 0 && value.dailyTarget <= 100000));
+    }
+
+    function isValidCustomTrackerList(value) {
+      return value is list && value.size() <= 10 &&
+             (value.size() < 1 || isValidCustomTracker(value[0])) &&
+             (value.size() < 2 || isValidCustomTracker(value[1])) &&
+             (value.size() < 3 || isValidCustomTracker(value[2])) &&
+             (value.size() < 4 || isValidCustomTracker(value[3])) &&
+             (value.size() < 5 || isValidCustomTracker(value[4])) &&
+             (value.size() < 6 || isValidCustomTracker(value[5])) &&
+             (value.size() < 7 || isValidCustomTracker(value[6])) &&
+             (value.size() < 8 || isValidCustomTracker(value[7])) &&
+             (value.size() < 9 || isValidCustomTracker(value[8])) &&
+             (value.size() < 10 || isValidCustomTracker(value[9]));
+    }
+
+    function isValidCustomTrackerValue(value) {
+      return value is map &&
+             value.keys().hasOnly(['trackerId', 'value']) &&
+             value.keys().hasAll(['trackerId', 'value']) &&
+             value.trackerId is string && value.trackerId.matches('^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$') &&
+             value.value is number && value.value >= 0 && value.value <= 100000;
+    }
+
+    function isValidCustomTrackerValues(value) {
+      return value is list && value.size() <= 10 &&
+             (value.size() < 1 || isValidCustomTrackerValue(value[0])) &&
+             (value.size() < 2 || isValidCustomTrackerValue(value[1])) &&
+             (value.size() < 3 || isValidCustomTrackerValue(value[2])) &&
+             (value.size() < 4 || isValidCustomTrackerValue(value[3])) &&
+             (value.size() < 5 || isValidCustomTrackerValue(value[4])) &&
+             (value.size() < 6 || isValidCustomTrackerValue(value[5])) &&
+             (value.size() < 7 || isValidCustomTrackerValue(value[6])) &&
+             (value.size() < 8 || isValidCustomTrackerValue(value[7])) &&
+             (value.size() < 9 || isValidCustomTrackerValue(value[8])) &&
+             (value.size() < 10 || isValidCustomTrackerValue(value[9]));
+    }
+
+    function isValidSystemConfiguration(value) {
+      return value is map &&
+             value.keys().hasOnly(['schemaVersion', 'enabledModules', 'dashboardLayout', 'customTrackers', 'goals', 'aiBehavior']) &&
+             value.keys().hasAll(['schemaVersion', 'enabledModules', 'dashboardLayout', 'customTrackers', 'goals', 'aiBehavior']) &&
+             value.schemaVersion == 1 &&
+             isValidSystemModuleList(value.enabledModules) &&
+             isValidDashboardWidgetList(value.dashboardLayout) &&
+             isValidCustomTrackerList(value.customTrackers) &&
+             value.goals is map &&
+             value.goals.keys().hasOnly(['primary', 'secondary']) &&
+             value.goals.keys().hasAll(['primary', 'secondary']) &&
+             value.goals.primary is string && value.goals.primary.size() <= 500 &&
+             value.goals.secondary is list && value.goals.secondary.size() <= 5 &&
+             (value.goals.secondary.size() < 1 || (value.goals.secondary[0] is string && value.goals.secondary[0].size() > 0 && value.goals.secondary[0].size() <= 200)) &&
+             (value.goals.secondary.size() < 2 || (value.goals.secondary[1] is string && value.goals.secondary[1].size() > 0 && value.goals.secondary[1].size() <= 200)) &&
+             (value.goals.secondary.size() < 3 || (value.goals.secondary[2] is string && value.goals.secondary[2].size() > 0 && value.goals.secondary[2].size() <= 200)) &&
+             (value.goals.secondary.size() < 4 || (value.goals.secondary[3] is string && value.goals.secondary[3].size() > 0 && value.goals.secondary[3].size() <= 200)) &&
+             (value.goals.secondary.size() < 5 || (value.goals.secondary[4] is string && value.goals.secondary[4].size() > 0 && value.goals.secondary[4].size() <= 200)) &&
+             value.aiBehavior in ['enabled', 'disabled'];
+    }
+
+    function isValidBoundedStringList(value, minItems, maxItems, maxItemLength, allowedValues) {
+      return value is list && value.size() >= minItems && value.size() <= maxItems &&
+             (value.size() < 1 || (value[0] is string && value[0].size() <= maxItemLength && value[0] in allowedValues)) &&
+             (value.size() < 2 || (value[1] is string && value[1].size() <= maxItemLength && value[1] in allowedValues)) &&
+             (value.size() < 3 || (value[2] is string && value[2].size() <= maxItemLength && value[2] in allowedValues)) &&
+             (value.size() < 4 || (value[3] is string && value[3].size() <= maxItemLength && value[3] in allowedValues)) &&
+             (value.size() < 5 || (value[4] is string && value[4].size() <= maxItemLength && value[4] in allowedValues));
+    }
+
+    function isValidOnboardingAnswers(data) {
+      return data is map &&
+             data.keys().hasOnly([
+               'schemaVersion', 'targetRole', 'customRoleTitle', 'chronotype', 'wakeTime', 'sleepTime',
+               'deepWorkCapacity', 'availableHoursPerDay', 'workDaysPerWeek', 'fixedCommitments',
+               'primaryGoal', 'secondaryGoals', 'trackingAreas', 'workoutMode', 'preferredSessionMinutes',
+               'planningStyle', 'appPreferences', 'customInstructions'
+             ]) &&
+             data.keys().hasAll([
+               'schemaVersion', 'targetRole', 'customRoleTitle', 'chronotype', 'wakeTime', 'sleepTime',
+               'deepWorkCapacity', 'availableHoursPerDay', 'workDaysPerWeek', 'fixedCommitments',
+               'primaryGoal', 'secondaryGoals', 'trackingAreas', 'workoutMode', 'preferredSessionMinutes',
+               'planningStyle', 'appPreferences', 'customInstructions'
+             ]) &&
+             data.schemaVersion == 1 &&
+             data.targetRole in ['student', 'engineer', 'founder', 'creator', 'fitness', 'custom'] &&
+             data.customRoleTitle is string && data.customRoleTitle.size() <= 80 &&
+             data.chronotype in ['early', 'standard', 'night'] &&
+             data.wakeTime is string && data.wakeTime.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$') &&
+             data.sleepTime is string && data.sleepTime.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$') &&
+             data.deepWorkCapacity in ['minimum', 'moderate', 'high'] &&
+             data.availableHoursPerDay is int && data.availableHoursPerDay >= 1 && data.availableHoursPerDay <= 16 &&
+             data.workDaysPerWeek is int && data.workDaysPerWeek >= 1 && data.workDaysPerWeek <= 7 &&
+             data.fixedCommitments is string && data.fixedCommitments.size() <= 1000 &&
+             data.primaryGoal is string && data.primaryGoal.size() <= 500 &&
+             data.secondaryGoals is string && data.secondaryGoals.size() <= 500 &&
+             isValidBoundedStringList(data.trackingAreas, 1, 5, 32, ['dsa', 'academics', 'fitness', 'projects', 'reading']) &&
+             data.workoutMode in ['gym', 'home'] &&
+             data.preferredSessionMinutes in [25, 50, 90] &&
+             data.planningStyle in ['minimal', 'balanced', 'structured'] &&
+             isValidBoundedStringList(data.appPreferences, 0, 4, 32, ['daily_briefing', 'gentle_prompts', 'weekly_review', 'ai_suggestions']) &&
+             data.customInstructions is string && data.customInstructions.size() <= 1000;
+    }
+
+    function isValidOnboardingRequirements(data) {
+      return data is map &&
+             data.keys().hasOnly(['schemaVersion', 'sourceAnswers', 'interpretation', 'source', 'userConfirmed', 'generatedAt']) &&
+             data.keys().hasAll(['schemaVersion', 'sourceAnswers', 'interpretation', 'source', 'userConfirmed', 'generatedAt']) &&
+             data.schemaVersion == 1 &&
+             isValidOnboardingAnswers(data.sourceAnswers) &&
+             data.interpretation is map &&
+             data.interpretation.keys().hasOnly(['summary', 'priorityAreas', 'constraints']) &&
+             data.interpretation.keys().hasAll(['summary', 'priorityAreas', 'constraints']) &&
+             data.interpretation.summary is string &&
+             data.interpretation.summary.size() > 0 &&
+             data.interpretation.summary.size() <= 500 &&
+             isValidBoundedStringList(data.interpretation.priorityAreas, 1, 5, 32, ['dsa', 'academics', 'fitness', 'projects', 'reading']) &&
+             data.sourceAnswers.trackingAreas.hasAll(data.interpretation.priorityAreas) &&
+             data.interpretation.constraints is string &&
+             data.interpretation.constraints.size() <= 1000 &&
+             data.source in ['gemini', 'offline'] &&
+             data.userConfirmed is bool &&
+             data.generatedAt is string && data.generatedAt.size() <= 64;
+    }
+
+    function isValidOnboardingProgress(data) {
+      return data.keys().hasOnly(['status', 'version', 'currentStage', 'startedAt', 'completedAt', 'updatedAt', 'answers', 'requirements', 'systemConfiguration']) &&
+             data.keys().hasAll(['status', 'version', 'currentStage', 'updatedAt']) &&
+             data.status in ['not_started', 'in_progress', 'completed'] &&
+             data.version is int && data.version >= 1 && data.version <= 100 &&
+             data.currentStage is int && data.currentStage >= 1 && data.currentStage <= 6 &&
+             data.updatedAt is string && data.updatedAt.size() <= 64 &&
+             (!('startedAt' in data) || (data.startedAt is string && data.startedAt.size() <= 64)) &&
+             (!('completedAt' in data) || (data.completedAt is string && data.completedAt.size() <= 64)) &&
+             (!('answers' in data) || isValidOnboardingAnswers(data.answers)) &&
+             (!('requirements' in data) ||
+               (isValidOnboardingRequirements(data.requirements) &&
+                'answers' in data &&
+                data.requirements.sourceAnswers == data.answers)) &&
+             (!('systemConfiguration' in data) ||
+               (isValidSystemConfiguration(data.systemConfiguration) &&
+                'requirements' in data &&
+                data.requirements.userConfirmed == true));
     }
 
     // Behavioral Core fields remain embedded in the day document. Lists are
@@ -117,34 +305,117 @@ service cloud.firestore {
              (!('focusSessions' in data) || (data.focusSessions is list && data.focusSessions.size() <= 20)) &&
              (!('recoveryDecisions' in data) || (data.recoveryDecisions is list && data.recoveryDecisions.size() <= 20)) &&
              (!('creditEvents' in data) || (data.creditEvents is list && data.creditEvents.size() <= 20)) &&
+             (!('customTrackerValues' in data) || isValidCustomTrackerValues(data.customTrackerValues)) &&
              (!('behavioralReview' in data) || isValidBehavioralReview(data.behavioralReview)) &&
              (!('tomorrowHandoff' in data) || isValidTomorrowHandoff(data.tomorrowHandoff));
 
     }
 
+    function isValidDayRecordUpdate(data, dateId, changed) {
+      return data.date is string &&
+             data.date == dateId &&
+             data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+             !changed.hasAny(['date', 'createdAt']) &&
+             changed.hasOnly([
+               'dayOfWeek', 'completionPercentage', 'notes', 'mood', 'energy', 'sleep',
+               'dailyReflection', 'tomorrowFirstAction', 'schedule', 'habits', 'academics',
+               'dsa', 'workout', 'project', 'skills', 'updatedAt', 'schemaVersion',
+               'syncRevision', 'dayStart', 'outcomes', 'focusSessions', 'recoveryDecisions',
+               'creditEvents', 'customTrackerValues', 'behavioralReview', 'tomorrowHandoff',
+               'lastSyncedAt'
+             ]) &&
+             isValidDayRecord(data, dateId) &&
+             (!changed.hasAny(['lastSyncedAt']) || data.lastSyncedAt is timestamp);
+    }
+
     // =========================================================================
     // USER DATA SPACE: /users/{uid}
     // =========================================================================
+    match /accountDeletionTombstones/{uid} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) &&
+        request.resource.data.keys().hasOnly(['status', 'startedAt']) &&
+        request.resource.data.keys().hasAll(['status', 'startedAt']) &&
+        request.resource.data.status == 'pending' &&
+        request.resource.data.startedAt == request.time;
+      allow update, delete: if false;
+    }
+
     match /users/{uid} {
       // User Profile root document
       allow read: if isOwner(uid);
-      allow create: if isOwner(uid) && isValidUserProfile(request.resource.data, uid);
-      allow update: if isOwner(uid) && isValidUserProfile(request.resource.data, uid);
-      allow delete: if isOwner(uid);
+      allow create: if isOwner(uid) && accountWritesAllowed(uid) &&
+        isValidUserProfile(request.resource.data, uid) &&
+        request.resource.data.uid == uid;
+      allow update: if isOwner(uid) &&
+        accountWritesAllowed(uid) &&
+        isValidUserProfile(request.resource.data, uid) &&
+        request.resource.data.uid == uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'displayName', 'photoURL', 'updatedAt']);
+      // Once the permanent tombstone exists, profile PII may be removed safely.
+      allow delete: if isOwner(uid) &&
+        exists(/databases/$(database)/documents/accountDeletionTombstones/$(uid));
 
       // User Settings Subcollection (/users/{uid}/settings/{settingId})
       match /settings/{settingId} {
         allow read: if isOwner(uid);
-        allow create: if isOwner(uid) && (settingId == 'main') && isValidUserSettings(request.resource.data);
-        allow update: if isOwner(uid) && (settingId == 'main') && isValidUserSettings(request.resource.data);
+        allow create: if isOwner(uid) && accountWritesAllowed(uid) && (settingId == 'main') && isValidUserSettings(request.resource.data);
+        allow update: if isOwner(uid) && accountWritesAllowed(uid) && (settingId == 'main') && isValidUserSettings(request.resource.data);
         allow delete: if isOwner(uid);
+      }
+
+      // Account-level onboarding status is authoritative across devices.
+      match /onboarding/{onboardingId} {
+        allow read: if isOwner(uid) && onboardingId == 'main';
+        allow create: if isOwner(uid) && accountWritesAllowed(uid) && onboardingId == 'main' && isValidOnboardingProgress(request.resource.data);
+        allow update: if isOwner(uid) && accountWritesAllowed(uid) && onboardingId == 'main' && isValidOnboardingProgress(request.resource.data);
+        allow delete: if isOwner(uid) && onboardingId == 'main';
       }
 
       // User Daily Records Subcollection (/users/{uid}/days/{dateId})
       match /days/{dateId} {
         allow read: if isOwner(uid) && isValidDateId(dateId);
-        allow create: if isOwner(uid) && isValidDateId(dateId) && isValidDayRecord(request.resource.data, dateId);
-        allow update: if isOwner(uid) && isValidDateId(dateId) && isValidDayRecord(request.resource.data, dateId);
+        allow create: if isOwner(uid) &&
+          accountWritesAllowed(uid) &&
+          isValidDateId(dateId) &&
+          request.resource.data.syncRevision == 1 &&
+          hasCurrentDaySyncState(uid, dateId, request.resource.data.syncRevision) &&
+          isValidDayRecord(request.resource.data, dateId);
+        allow update: if isOwner(uid) &&
+          accountWritesAllowed(uid) &&
+          isValidDateId(dateId) &&
+          request.resource.data.syncRevision is int &&
+          request.resource.data.syncRevision >= 1 &&
+          request.resource.data.syncRevision <= 2147483647 &&
+          hasCurrentDaySyncState(uid, dateId, request.resource.data.syncRevision) &&
+          isValidDayRecordUpdate(
+            request.resource.data,
+            dateId,
+            request.resource.data.diff(resource.data).affectedKeys()
+          );
+        allow delete: if isOwner(uid) && isValidDateId(dateId);
+      }
+
+      // The per-day sync state is a small atomic commit marker that old
+      // whole-document clients do not write.
+      match /daySyncState/{dateId} {
+        allow read: if isOwner(uid) && isValidDateId(dateId);
+        allow create: if isOwner(uid) &&
+          accountWritesAllowed(uid) &&
+          isValidDateId(dateId) &&
+          request.resource.data.keys().hasOnly(['revision', 'committedAt']) &&
+          request.resource.data.keys().hasAll(['revision', 'committedAt']) &&
+          request.resource.data.revision is int &&
+          request.resource.data.revision >= 1 &&
+          request.resource.data.committedAt == request.time;
+        allow update: if isOwner(uid) &&
+          accountWritesAllowed(uid) &&
+          isValidDateId(dateId) &&
+          request.resource.data.keys().hasOnly(['revision', 'committedAt']) &&
+          request.resource.data.keys().hasAll(['revision', 'committedAt']) &&
+          request.resource.data.revision is int &&
+          request.resource.data.revision > resource.data.revision &&
+          request.resource.data.committedAt == request.time;
         allow delete: if isOwner(uid) && isValidDateId(dateId);
       }
     }

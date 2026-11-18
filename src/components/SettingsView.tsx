@@ -16,21 +16,39 @@ import {
   Globe,
   ExternalLink,
 } from 'lucide-react';
-import { AuthErrorInfo, AuthUser, UserSettings, DayRecord } from '../types';
+import {
+  AuthErrorInfo,
+  AuthUser,
+  CustomTrackerDefinition,
+  DashboardWidgetId,
+  DayRecord,
+  SystemModuleId,
+  UserSettings,
+} from '../types';
 import { DAYS_OF_WEEK } from '../constants/templates';
 import { isFirebaseConfigured, getFirebaseAuthDiagnostics } from '../firebase';
 import { validateAndSanitizeBackup, ValidationResult } from '../utils/backupValidation';
 import { getLocalDateId } from '../utils/localDate';
+import {
+  DASHBOARD_WIDGET_REGISTRY,
+  getSystemConfiguration,
+  SYSTEM_MODULE_REGISTRY,
+} from '../services/systemConfiguration';
 
 interface SettingsViewProps {
   user: AuthUser | null;
   settings: UserSettings;
   allDays: Record<string, DayRecord>;
+  loadCompleteHistory: () => Promise<Record<string, DayRecord>>;
   onSignOut: () => void;
   onSignIn: () => void;
   onUpdateSettings: (newSettings: UserSettings) => void;
-  onImportBackup: (days: Record<string, DayRecord>, settings?: UserSettings) => void;
-  onDeleteAccount: () => void;
+  onImportBackup: (
+    days: Record<string, DayRecord>,
+    settings: Partial<UserSettings> | undefined,
+    mode: 'merge' | 'replace'
+  ) => void | Promise<void>;
+  onDeleteAccount: () => void | Promise<void>;
   isSigningIn?: boolean;
   authError?: AuthErrorInfo | string | null;
   onClearAuthError?: () => void;
@@ -40,6 +58,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   user,
   settings,
   allDays,
+  loadCompleteHistory,
   onSignOut,
   onSignIn,
   onUpdateSettings,
@@ -51,13 +70,30 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 }) => {
   const [deleteConfirmationText, setDeleteConfirmationText] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [pendingImport, setPendingImport] = useState<ValidationResult | null>(null);
   const [showExportWarning, setShowExportWarning] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
   const [copiedDomain, setCopiedDomain] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [trackerName, setTrackerName] = useState('');
+  const [trackerUnit, setTrackerUnit] = useState('');
+  const [trackerTarget, setTrackerTarget] = useState('');
   const diagnostics = getFirebaseAuthDiagnostics();
+  const systemConfiguration = getSystemConfiguration(settings.systemConfiguration);
+
+  const updateSystemConfiguration = (
+    update: Partial<typeof systemConfiguration>
+  ) => {
+    onUpdateSettings({
+      ...settings,
+      systemConfiguration: { ...systemConfiguration, ...update },
+    });
+  };
 
   const handleCopy = (text: string) => {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
@@ -67,36 +103,54 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  // Trigger Safe JSON Export with privacy disclosure
-  const handleExportData = () => {
-    const backupData = {
-      manifest: 'DAILY OS — Encrypted / Private Personal Backup',
-      exportDate: new Date().toISOString(),
-      recordCount: Object.keys(allDays).length,
-      settings: {
-        defaultWorkoutMode: settings.defaultWorkoutMode,
-        academicSchedule: settings.academicSchedule,
-        dailySystem: settings.dailySystem,
-        theme: settings.theme,
-        notificationsEnabled: settings.notificationsEnabled,
-      },
-      days: allDays,
-    };
+  const handleDeleteAccount = async () => {
+    setDeleteError(null);
+    setIsDeleting(true);
+    try {
+      await onDeleteAccount();
+      setShowDeleteConfirm(false);
+      setDeleteConfirmationText('');
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : 'Account deletion could not be completed. Retry to continue.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
-    const dataStr =
-      'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(backupData, null, 2));
-    const downloadAnchor = document.createElement('a');
-    downloadAnchor.setAttribute('href', dataStr);
-    downloadAnchor.setAttribute(
-      'download',
-      `daily-os-private-backup-${getLocalDateId()}.json`
-    );
-    document.body.appendChild(downloadAnchor);
-    downloadAnchor.click();
-    downloadAnchor.remove();
+  // Export a plaintext backup; this is intentionally not described as encrypted.
+  const handleExportData = async () => {
+    setExportError(null);
+    setIsExporting(true);
+    try {
+      const completeDays = await loadCompleteHistory();
+      const backupData = {
+        schemaVersion: 1,
+        manifest: 'Daily OS plaintext personal backup',
+        exportDate: new Date().toISOString(),
+        recordCount: Object.keys(completeDays).length,
+        settings,
+        days: completeDays,
+      };
+      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+      if (blob.size > 5 * 1024 * 1024) {
+        throw new Error('This backup exceeds the 5MB import limit. Remove large wallpaper images or export less history before trying again.');
+      }
 
-    setShowExportWarning(true);
-    setTimeout(() => setShowExportWarning(false), 8000);
+      const objectUrl = URL.createObjectURL(blob);
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.href = objectUrl;
+      downloadAnchor.download = `daily-os-backup-${getLocalDateId()}.json`;
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+      setShowExportWarning(true);
+      setTimeout(() => setShowExportWarning(false), 8000);
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : 'The backup could not be exported.');
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   // Safe file reader & schema validator
@@ -139,25 +193,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   // Confirm and apply import
-  const executeImport = (mode: 'merge' | 'replace') => {
+  const executeImport = async (mode: 'merge' | 'replace') => {
     if (!pendingImport || !pendingImport.sanitizedDays) return;
 
-    let finalDays: Record<string, DayRecord> = {};
-    if (mode === 'replace') {
-      finalDays = pendingImport.sanitizedDays;
-    } else {
-      // Merge: Keep existing records, add or update with imported
-      finalDays = { ...allDays, ...pendingImport.sanitizedDays };
+    try {
+      await onImportBackup(pendingImport.sanitizedDays, pendingImport.sanitizedSettings, mode);
+      setImportStatus(
+        `Successfully ${mode === 'replace' ? 'replaced' : 'merged'} ${
+          Object.keys(pendingImport.sanitizedDays).length
+        } imported daily records.`
+      );
+      setPendingImport(null);
+      setTimeout(() => setImportStatus(null), 5000);
+    } catch (err) {
+      console.error('Backup import failed:', err);
+      setImportError(err instanceof Error ? err.message : 'Backup data could not be saved.');
     }
-
-    onImportBackup(finalDays, pendingImport.sanitizedSettings);
-    setImportStatus(
-      `Successfully ${mode === 'replace' ? 'replaced with' : 'merged'} ${
-        Object.keys(pendingImport.sanitizedDays).length
-      } daily records!`
-    );
-    setPendingImport(null);
-    setTimeout(() => setImportStatus(null), 5000);
   };
 
   // Update academic schedule item
@@ -173,6 +224,60 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           [field]: value.slice(0, 100),
         },
       },
+    });
+  };
+
+  const toggleModule = (moduleId: SystemModuleId, enabled: boolean) => {
+    const enabledModules = enabled
+      ? [...systemConfiguration.enabledModules, moduleId]
+      : systemConfiguration.enabledModules.filter((id) => id !== moduleId);
+    updateSystemConfiguration({ enabledModules });
+  };
+
+  const toggleWidget = (widgetId: DashboardWidgetId, enabled: boolean) => {
+    const dashboardLayout = enabled
+      ? [...systemConfiguration.dashboardLayout, widgetId]
+      : systemConfiguration.dashboardLayout.filter((id) => id !== widgetId);
+    updateSystemConfiguration({ dashboardLayout });
+  };
+
+  const moveWidget = (index: number, offset: -1 | 1) => {
+    const nextIndex = index + offset;
+    if (nextIndex < 0 || nextIndex >= systemConfiguration.dashboardLayout.length) return;
+    const dashboardLayout = [...systemConfiguration.dashboardLayout];
+    [dashboardLayout[index], dashboardLayout[nextIndex]] = [dashboardLayout[nextIndex], dashboardLayout[index]];
+    updateSystemConfiguration({ dashboardLayout });
+  };
+
+  const addCustomTracker = () => {
+    const name = trackerName.trim();
+    if (!name || systemConfiguration.customTrackers.length >= 10) return;
+    const target = trackerTarget.trim() ? Number(trackerTarget) : undefined;
+    if (target !== undefined && (!Number.isFinite(target) || target < 0 || target > 100000)) return;
+    const id = `tracker-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    updateSystemConfiguration({
+      customTrackers: [
+        ...systemConfiguration.customTrackers,
+        {
+          id,
+          name: name.slice(0, 50),
+          unit: trackerUnit.trim().slice(0, 20),
+          ...(target !== undefined ? { dailyTarget: target } : {}),
+        },
+      ],
+    });
+    setTrackerName('');
+    setTrackerUnit('');
+    setTrackerTarget('');
+  };
+
+  const updateCustomTracker = (tracker: CustomTrackerDefinition) => {
+    const updatedTracker = { ...tracker };
+    if (updatedTracker.dailyTarget === undefined) delete updatedTracker.dailyTarget;
+    updateSystemConfiguration({
+      customTrackers: systemConfiguration.customTrackers.map((item) =>
+        item.id === tracker.id ? updatedTracker : item
+      ),
     });
   };
 
@@ -571,10 +676,154 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </section>
 
+      <section className="p-5 rounded-xl bg-[#12151e] border border-[#202534] space-y-5">
+        <div>
+          <h2 className="text-sm font-semibold tracking-wide uppercase text-zinc-200">System Configuration</h2>
+          <p className="text-xs text-zinc-500 mt-1">Choose enabled workspaces, dashboard widgets, goals, and AI behavior.</p>
+        </div>
+
+        <div className="space-y-2">
+          <h3 className="text-xs font-semibold text-zinc-300">Modules</h3>
+          {SYSTEM_MODULE_REGISTRY.map((module) => (
+            <label key={module.id} className="flex items-start gap-2.5 p-2.5 rounded-lg bg-[#0e1118] border border-[#1f2433] cursor-pointer">
+              <input
+                type="checkbox"
+                checked={systemConfiguration.enabledModules.includes(module.id)}
+                onChange={(event) => toggleModule(module.id, event.target.checked)}
+                className="mt-0.5 accent-indigo-500"
+              />
+              <span>
+                <span className="block text-xs text-zinc-200">{module.label}</span>
+                <span className="block text-[11px] text-zinc-500">{module.description}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+
+        <div className="space-y-2">
+          <h3 className="text-xs font-semibold text-zinc-300">Dashboard widgets</h3>
+          {DASHBOARD_WIDGET_REGISTRY.map((widget) => (
+            <label key={widget.id} className="flex items-center gap-2.5 p-2.5 rounded-lg bg-[#0e1118] border border-[#1f2433] cursor-pointer">
+              <input
+                type="checkbox"
+                checked={systemConfiguration.dashboardLayout.includes(widget.id)}
+                onChange={(event) => toggleWidget(widget.id, event.target.checked)}
+                className="accent-indigo-500"
+              />
+              <span className="flex-1">
+                <span className="block text-xs text-zinc-200">{widget.label}</span>
+                <span className="block text-[11px] text-zinc-500">{widget.description}</span>
+              </span>
+            </label>
+          ))}
+          <ol className="space-y-1">
+            {systemConfiguration.dashboardLayout.map((widgetId, index) => (
+              <li key={widgetId} className="flex items-center gap-2 text-xs text-zinc-300">
+                <span className="flex-1">{index + 1}. {DASHBOARD_WIDGET_REGISTRY.find((item) => item.id === widgetId)?.label}</span>
+                <button type="button" disabled={index === 0} onClick={() => moveWidget(index, -1)} className="px-2 py-1 rounded bg-[#202534] disabled:opacity-40">Up</button>
+                <button type="button" disabled={index === systemConfiguration.dashboardLayout.length - 1} onClick={() => moveWidget(index, 1)} className="px-2 py-1 rounded bg-[#202534] disabled:opacity-40">Down</button>
+              </li>
+            ))}
+          </ol>
+        </div>
+
+        <div className="space-y-2">
+          <h3 className="text-xs font-semibold text-zinc-300">Goals</h3>
+          <input
+            type="text"
+            maxLength={500}
+            value={systemConfiguration.goals.primary}
+            onChange={(event) => updateSystemConfiguration({
+              goals: { ...systemConfiguration.goals, primary: event.target.value },
+            })}
+            placeholder="Primary goal"
+            className="w-full px-3 py-2 rounded-lg bg-[#0e1118] border border-[#1f2433] text-xs text-zinc-200"
+          />
+          <textarea
+            rows={3}
+            maxLength={1000}
+            value={systemConfiguration.goals.secondary.join('\n')}
+            onChange={(event) => updateSystemConfiguration({
+              goals: {
+                ...systemConfiguration.goals,
+                secondary: event.target.value.split('\n').map((goal) => goal.trim().slice(0, 200)).filter(Boolean).slice(0, 5),
+              },
+            })}
+            placeholder="Supporting goals, one per line (up to 5)"
+            className="w-full px-3 py-2 rounded-lg bg-[#0e1118] border border-[#1f2433] text-xs text-zinc-200"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <h3 className="text-xs font-semibold text-zinc-300">Custom daily trackers</h3>
+          {systemConfiguration.customTrackers.map((tracker) => (
+            <div key={tracker.id} className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 text-xs text-zinc-200">{tracker.name}</span>
+              <input
+                aria-label="Tracker unit"
+                maxLength={20}
+                value={tracker.unit}
+                onChange={(event) => updateCustomTracker({ ...tracker, unit: event.target.value })}
+                placeholder="Unit"
+                className="w-24 px-2 py-2 rounded-lg bg-[#0e1118] border border-[#1f2433] text-xs text-zinc-200"
+              />
+              <input
+                aria-label="Daily target"
+                type="number"
+                min="0"
+                max="100000"
+                step="any"
+                value={tracker.dailyTarget ?? ''}
+                onChange={(event) => {
+                  if (event.target.value === '') {
+                    updateCustomTracker({ ...tracker, dailyTarget: undefined });
+                  } else {
+                    const target = Number(event.target.value);
+                    if (Number.isFinite(target) && target >= 0 && target <= 100000) {
+                      updateCustomTracker({ ...tracker, dailyTarget: target });
+                    }
+                  }
+                }}
+                placeholder="Target"
+                className="w-24 px-2 py-2 rounded-lg bg-[#0e1118] border border-[#1f2433] text-xs text-zinc-200"
+              />
+              <button
+                type="button"
+                onClick={() => updateSystemConfiguration({
+                  customTrackers: systemConfiguration.customTrackers.filter((item) => item.id !== tracker.id),
+                })}
+                className="px-2 py-2 rounded-lg bg-red-950/40 text-red-300 text-xs"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          <div className="flex gap-2">
+            <input value={trackerName} maxLength={50} onChange={(event) => setTrackerName(event.target.value)} placeholder="Tracker name" className="min-w-0 flex-1 px-2 py-2 rounded-lg bg-[#0e1118] border border-[#1f2433] text-xs text-zinc-200" />
+            <input value={trackerUnit} maxLength={20} onChange={(event) => setTrackerUnit(event.target.value)} placeholder="Unit" className="w-24 px-2 py-2 rounded-lg bg-[#0e1118] border border-[#1f2433] text-xs text-zinc-200" />
+            <input value={trackerTarget} type="number" min="0" max="100000" step="any" onChange={(event) => setTrackerTarget(event.target.value)} placeholder="Target" className="w-24 px-2 py-2 rounded-lg bg-[#0e1118] border border-[#1f2433] text-xs text-zinc-200" />
+            <button type="button" onClick={addCustomTracker} disabled={!trackerName.trim() || systemConfiguration.customTrackers.length >= 10 || (trackerTarget !== '' && (!Number.isFinite(Number(trackerTarget)) || Number(trackerTarget) < 0 || Number(trackerTarget) > 100000))} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs disabled:opacity-40">Add</button>
+          </div>
+        </div>
+
+        <label className="flex items-center gap-2.5 text-xs text-zinc-300 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={systemConfiguration.aiBehavior === 'enabled'}
+            onChange={(event) => updateSystemConfiguration({ aiBehavior: event.target.checked ? 'enabled' : 'disabled' })}
+            className="accent-indigo-500"
+          />
+          Enable AI-powered features
+        </label>
+        <p className="text-[11px] leading-relaxed text-zinc-500">
+          When a Gemini feature runs, it sends that feature's prompt and relevant day or onboarding details to Google. A key entered in the app stays in this browser; requests are processed by Google.
+        </p>
+      </section>
+
       {/* Data Management Section */}
       <section className="p-5 rounded-xl bg-[#12151e] border border-[#202534] space-y-4">
         <h2 className="text-sm font-semibold tracking-wide uppercase text-zinc-200">
-          Data Portability & Secure Backup
+          Data Portability & Backup
         </h2>
 
         {/* Export Privacy Warning Banner */}
@@ -583,10 +832,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             <div>
               <span className="font-semibold block mb-0.5">Privacy Notice</span>
-              This downloaded JSON file contains your personal tracker data (schedules, DSA learning
-              logs, workout history, and reflections). Store it securely and do not share it
-              unencrypted.
+              This JSON backup is not encrypted. It contains day history and settings, including any
+              custom wallpaper image data. Raw onboarding questionnaire answers and credentials are
+              not included. Store the file securely.
             </div>
+          </div>
+        )}
+        {exportError && (
+          <div className="p-2.5 bg-red-950/30 border border-red-900/50 text-red-300 text-xs rounded-lg">
+            {exportError}
           </div>
         )}
 
@@ -608,10 +862,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           {/* Export JSON */}
           <button
             onClick={handleExportData}
+            disabled={isExporting}
             className="flex items-center justify-center space-x-2 p-3 rounded-lg bg-[#141822] hover:bg-[#1a202e] border border-[#23293a] text-zinc-200 text-xs font-medium transition-colors"
           >
             <Download className="w-4 h-4 text-zinc-400" />
-            <span>Export Encrypted JSON Backup</span>
+            <span>{isExporting ? 'Preparing complete backup…' : 'Export Plaintext JSON Backup'}</span>
           </button>
 
           {/* Import JSON Backup */}
@@ -644,11 +899,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div>
                 Date span:{' '}
                 <span className="font-mono text-zinc-400">
-                  {pendingImport.stats.startDate} → {pendingImport.stats.endDate}
+                  {pendingImport.stats.startDate && pendingImport.stats.endDate
+                    ? `${pendingImport.stats.startDate} → ${pendingImport.stats.endDate}`
+                    : 'No daily records'}
                 </span>
               </div>
               <div className="text-[11px] text-zinc-400 pt-1">
-                All records will be securely bound strictly to your authenticated account UID.
+                Backups are imported into the current account or local guest history. Settings in
+                the backup update matching fields and preserve unspecified current settings.
               </div>
             </div>
 
@@ -657,14 +915,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 onClick={() => executeImport('merge')}
                 className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 rounded text-xs font-medium border border-zinc-600 transition-colors"
               >
-                Merge (Add Missing & Update Newer)
+                Merge (newer timestamps win; imported wins ties)
               </button>
-              <button
-                onClick={() => executeImport('replace')}
-                className="px-3 py-1.5 bg-amber-950/40 hover:bg-amber-900/60 text-amber-200 rounded text-xs font-medium border border-amber-800/60 transition-colors"
-              >
-                Replace All Current Records
-              </button>
+              {user ? (
+                <p className="basis-full text-[11px] text-amber-300">
+                  Replace is unavailable while signed in: safely deleting omitted cloud days requires
+                  coordinating pending edits across devices. Use Merge or sign out to replace local guest history.
+                </p>
+              ) : (
+                <button
+                  onClick={() => executeImport('replace')}
+                  className="px-3 py-1.5 bg-amber-950/40 hover:bg-amber-900/60 text-amber-200 rounded text-xs font-medium border border-amber-800/60 transition-colors"
+                >
+                  Replace Guest History
+                </button>
+              )}
               <button
                 onClick={() => setPendingImport(null)}
                 className="px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200"
@@ -689,32 +954,36 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="p-4 rounded-lg bg-red-950/20 border border-red-900/50 space-y-3">
               <div className="flex items-center gap-2 text-xs font-semibold text-red-300">
                 <ShieldAlert className="w-4 h-4" />
-                <span>Confirm Permanent Data Deletion</span>
+                <span>Confirm Account and Data Deletion</span>
               </div>
               <p className="text-[11px] text-zinc-400">
                 This will permanently delete all daily logs, reflections, workout records, DSA
-                history, and settings from Cloud Firestore and clear all local device storage. Type{' '}
+                history, settings, and your sign-in account. Deletion is blocked from syncing before cleanup begins. Type{' '}
                 <strong className="text-zinc-200 font-mono">DELETE</strong> to confirm:
               </p>
+              {deleteError && <p className="text-xs text-red-300" role="alert">{deleteError} The account is locked from syncing; retry deletion to continue.</p>}
               <div className="flex gap-2">
                 <input
                   type="text"
                   placeholder="DELETE"
                   value={deleteConfirmationText}
                   onChange={(e) => setDeleteConfirmationText(e.target.value)}
+                  disabled={isDeleting}
                   className="px-3 py-1 text-xs bg-[#0e1118] border border-red-900/60 rounded text-zinc-100 focus:outline-hidden font-mono"
                 />
                 <button
-                  disabled={deleteConfirmationText !== 'DELETE'}
-                  onClick={onDeleteAccount}
+                  disabled={deleteConfirmationText !== 'DELETE' || isDeleting}
+                  onClick={() => { void handleDeleteAccount(); }}
                   className="px-3 py-1 bg-red-800 hover:bg-red-700 disabled:opacity-50 text-zinc-100 rounded text-xs font-medium transition-colors"
                 >
-                  Confirm Delete
+                  {isDeleting ? 'Deleting…' : 'Confirm Delete'}
                 </button>
                 <button
+                  disabled={isDeleting}
                   onClick={() => {
                     setShowDeleteConfirm(false);
                     setDeleteConfirmationText('');
+                    setDeleteError(null);
                   }}
                   className="px-2 text-xs text-zinc-400"
                 >

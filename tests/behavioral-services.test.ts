@@ -3,6 +3,7 @@ import { canAddOpenOutcome, completeReview, decideRecovery, generateTomorrowHand
 import { getPrescribedSetCount } from '../src/utils/workout';
 import { createDefaultDayRecord, DEFAULT_SETTINGS } from '../src/constants/templates';
 import { parseAppCustomizationResponse } from '../src/services/appCustomization';
+import { getSystemConfiguration } from '../src/services/systemConfiguration';
 
 let passed = 0;
 function assert(name: string, condition: boolean): void { if (!condition) throw new Error(`FAIL: ${name}`); passed++; }
@@ -66,11 +67,11 @@ const commandResult = parseAppCustomizationResponse(JSON.stringify({
     nonNegotiables: [{ name: commandDay.workout.dailyNonNegotiables[0].name, target: 'Daily' }],
     workoutExercises: [{ name: 'New exercise', target: '8 reps', sets: 2 }],
   },
-}), commandDay);
+}), commandDay, getSystemConfiguration(DEFAULT_SETTINGS.systemConfiguration));
 assert('AI customization preserves matching block identity and completion while adding requested blocks', commandResult.dailySystem.schedule.length === 2 && commandResult.dailySystem.schedule[0].id === commandDay.schedule[0].id && commandResult.dailySystem.schedule[0].status === 'completed');
 let malformedCommandRejected = false;
 try {
-  parseAppCustomizationResponse('not JSON', commandDay);
+  parseAppCustomizationResponse('not JSON', commandDay, getSystemConfiguration(DEFAULT_SETTINGS.systemConfiguration));
 } catch {
   malformedCommandRejected = true;
 }

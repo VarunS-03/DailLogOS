@@ -1,0 +1,24 @@
+# Daily OS Feature Inventory
+
+This inventory reflects the checked-in React application and current data model. “Implemented” means the feature is wired into a view and persistence path; it does not imply live Firebase or device testing.
+
+| Area | Implementation and persistence | Access / state | Verification and gap |
+|---|---|---|---|
+| Dashboard and daily plan | `TodayDashboard` edits the active `DayRecord`; authenticated edits enter the IndexedDB outbox, guest edits use local storage. | Today navigation; default day and loading paths exist. | Sync/domain tests cover record changes; browser interaction is not run here. |
+| Goals and custom trackers | Goals and tracker definitions live in `UserSystemConfiguration`; daily values live on `DayRecord`. | Settings customization and dashboard widgets. | Configuration and backup contract tests; no end-to-end UI test. |
+| Routines and schedules | Routine templates and schedule entries are represented in user settings and day records. | Today and Track workspace. | Domain/schema tests; browser persistence behavior is not manually checked. |
+| Academic, DSA, workout, projects | Track workspace edits the corresponding `DayRecord` sections; module enablement is settings-backed. | One navigation destination adapts to enabled modules. | Day sync, validation, and behavior tests. |
+| History, calendar, review, insights | `InsightsView` consumes a descending page of the `allDays` map and selects historical dates. Older pages load on request with a date cursor; date-key merging prevents duplicate rows. | Insights & Review navigation, available when enabled. | Pagination, boundary, incomplete-coverage, and sync tests. Insights labels cached/partial history and explains that trends use loaded records only. Full history is fetched only for explicit backup/export and merge-import actions. |
+| Settings and customization | Theme, wallpaper, schedules, routines, modules, widgets, goals, trackers, and AI behavior are stored in `UserSettings`. | Settings navigation. | Settings/configuration tests; no visual browser audit. |
+| Onboarding | Raw questionnaire answers, interpretation, confirmation, and generated configuration are separate typed values; authenticated progress is stored under `/users/{uid}/onboarding/main`, guest drafts in local storage. | Modal shown for incomplete accounts/guest sessions. | Onboarding, interpreter, and rules contract tests. Gemini live response is not tested. |
+| AI assistant | Gemini services power chat, briefing, reflection, and configuration proposals; validated proposals are applied through existing models. | Chat and AI-enabled views; API key can come from a Vite environment variable or browser local storage. | Mock/domain tests cover proposal validation. Requests are client-side and can include personal day context; no live provider test. |
+| Backup and restore | Plaintext JSON includes day records and settings; import validates before staging. Guest Replace works; authenticated Replace is disabled. | Settings data portability section. | Schema/merge tests. Import settings and day persistence are separate, so a settings write failure can leave the days imported; the UI states this. |
+| Authentication and guest mode | Firebase Google auth is optional; UID-scoped cloud/cache/outbox for accounts and local persistence for guests. | Navigation sign-in/sign-out controls. | Rules Emulator and UID-isolation tests. Real Google OAuth/session switching is not verified. |
+| Account deletion | Immutable cloud tombstone blocks writes, cleanup removes account data/profile and local UID cache, then Firebase Auth deletion runs. | Settings confirmation and resume UI. | Unit cleanup retry and Emulator rules tests; live reauthentication/Auth deletion requires manual verification. |
+
+## Product integrity notes
+
+- Disabling a module changes configuration only; it does not delete daily records or their history.
+- Desktop and mobile navigation are both implemented. They share navigation destinations and module-aware filtering.
+- Historical insights operate on the loaded `allDays` map. Authenticated history starts with a bounded page; users can load older records. A complete indicator is shown only after server pagination reaches the end. Date-range filtering is not currently exposed as a UI control.
+- Automated validation in this repository is strongest at service, schema, and Emulator boundaries. No browser automation is configured, so layout, keyboard use, and interaction states remain manual checks.

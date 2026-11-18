@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Code2,
   BookOpen,
@@ -14,17 +14,25 @@ import {
   Trash2,
   Lightbulb,
 } from 'lucide-react';
-import { DayRecord, DsaProblem, WorkoutSession, AcademicsSession, ProjectSession } from '../types';
+import { DayRecord, DsaProblem, SystemModuleId, WorkoutSession, AcademicsSession, ProjectSession } from '../types';
 import { assistDsaProblem, DsaAiAssistance } from '../services/ai';
 import { GYM_WORKOUT_PLANS, CALISTHENICS_WORKOUT_PLANS, ACADEMIC_SUBJECTS } from '../constants/templates';
 
 interface TrackViewProps {
   day: DayRecord;
-  onUpdateDay: (updatedDay: DayRecord) => Promise<void>;
+  onUpdateDay: (updatedDay: DayRecord, baseDay?: DayRecord) => Promise<void>;
   initialSection?: 'dsa' | 'academics' | 'workout' | 'projects';
+  enabledModules: SystemModuleId[];
+  aiEnabled: boolean;
 }
 
-export const TrackView: React.FC<TrackViewProps> = ({ day, onUpdateDay, initialSection = 'dsa' }) => {
+export const TrackView: React.FC<TrackViewProps> = ({
+  day,
+  onUpdateDay,
+  initialSection = 'dsa',
+  enabledModules,
+  aiEnabled,
+}) => {
   const [activeSubTab, setActiveSubTab] = useState<'dsa' | 'academics' | 'workout' | 'projects'>(initialSection);
 
   // DSA State
@@ -35,9 +43,16 @@ export const TrackView: React.FC<TrackViewProps> = ({ day, onUpdateDay, initialS
   const [aiAssistance, setAiAssistance] = useState<DsaAiAssistance | null>(null);
   const [isAiLoading, setIsAiLoading] = useState(false);
 
+  useEffect(() => {
+    if (enabledModules.includes(activeSubTab)) return;
+    const nextModule = (['dsa', 'academics', 'workout', 'projects'] as const)
+      .find((module) => enabledModules.includes(module));
+    if (nextModule) setActiveSubTab(nextModule);
+  }, [activeSubTab, enabledModules]);
+
   // Request AI Assistance for DSA
   const handleAskDsaAi = async () => {
-    if (!problemTitle.trim()) return;
+    if (!aiEnabled || !problemTitle.trim()) return;
     setIsAiLoading(true);
     try {
       const res = await assistDsaProblem(problemTitle, platform, difficulty);
@@ -71,7 +86,7 @@ export const TrackView: React.FC<TrackViewProps> = ({ day, onUpdateDay, initialS
     };
 
     const updated = [...(day.dsa || []), newProblem];
-    await onUpdateDay({ ...day, dsa: updated });
+    await onUpdateDay({ ...day, dsa: updated }, day);
 
     setProblemTitle('');
     setAiAssistance(null);
@@ -80,7 +95,7 @@ export const TrackView: React.FC<TrackViewProps> = ({ day, onUpdateDay, initialS
 
   const handleDeleteDsa = async (id: string) => {
     const updated = (day.dsa || []).filter((p) => p.id !== id);
-    await onUpdateDay({ ...day, dsa: updated });
+    await onUpdateDay({ ...day, dsa: updated }, day);
   };
 
   // Workout state
@@ -95,14 +110,14 @@ export const TrackView: React.FC<TrackViewProps> = ({ day, onUpdateDay, initialS
     await onUpdateDay({
       ...day,
       workout: { ...workout, exercises: updatedEx },
-    });
+    }, day);
   };
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6">
       {/* Sub-tab Navigation */}
       <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-[#11141c] border border-[#1f2638] mb-6">
-        <button
+        {enabledModules.includes('dsa') && <button
           onClick={() => setActiveSubTab('dsa')}
           className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
             activeSubTab === 'dsa'
@@ -112,9 +127,9 @@ export const TrackView: React.FC<TrackViewProps> = ({ day, onUpdateDay, initialS
         >
           <Code2 className="w-4 h-4" />
           <span>DSA Practice ({day.dsa?.length || 0})</span>
-        </button>
+        </button>}
 
-        <button
+        {enabledModules.includes('academics') && <button
           onClick={() => setActiveSubTab('academics')}
           className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
             activeSubTab === 'academics'
@@ -124,9 +139,9 @@ export const TrackView: React.FC<TrackViewProps> = ({ day, onUpdateDay, initialS
         >
           <BookOpen className="w-4 h-4" />
           <span>Academics</span>
-        </button>
+        </button>}
 
-        <button
+        {enabledModules.includes('workout') && <button
           onClick={() => setActiveSubTab('workout')}
           className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
             activeSubTab === 'workout'
@@ -136,9 +151,9 @@ export const TrackView: React.FC<TrackViewProps> = ({ day, onUpdateDay, initialS
         >
           <Dumbbell className="w-4 h-4" />
           <span>Workout</span>
-        </button>
+        </button>}
 
-        <button
+        {enabledModules.includes('projects') && <button
           onClick={() => setActiveSubTab('projects')}
           className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
             activeSubTab === 'projects'
@@ -148,7 +163,7 @@ export const TrackView: React.FC<TrackViewProps> = ({ day, onUpdateDay, initialS
         >
           <Terminal className="w-4 h-4" />
           <span>Projects</span>
-        </button>
+        </button>}
       </div>
 
       {/* 1. DSA SUB-TAB */}
@@ -175,7 +190,7 @@ export const TrackView: React.FC<TrackViewProps> = ({ day, onUpdateDay, initialS
                 <span className="text-xs font-semibold text-emerald-300 uppercase tracking-wider font-mono">
                   Quick Problem Logger + AI Coach
                 </span>
-                <span className="text-[11px] text-zinc-400">AI auto-fills patterns & complexities</span>
+                <span className="text-[11px] text-zinc-400">{aiEnabled ? 'AI auto-fills patterns & complexities' : 'Manual problem logging'}</span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -205,7 +220,7 @@ export const TrackView: React.FC<TrackViewProps> = ({ day, onUpdateDay, initialS
               </div>
 
               <div className="flex gap-2">
-                <button
+                {aiEnabled && <button
                   type="button"
                   onClick={handleAskDsaAi}
                   disabled={!problemTitle.trim() || isAiLoading}
@@ -213,7 +228,7 @@ export const TrackView: React.FC<TrackViewProps> = ({ day, onUpdateDay, initialS
                 >
                   <Sparkles className={`w-3.5 h-3.5 ${isAiLoading ? 'animate-spin' : ''}`} />
                   <span>{isAiLoading ? 'Analyzing...' : 'AI Pattern & Approach Hints'}</span>
-                </button>
+                </button>}
               </div>
 
               {/* AI Guidance Box */}
@@ -333,7 +348,7 @@ export const TrackView: React.FC<TrackViewProps> = ({ day, onUpdateDay, initialS
                     onUpdateDay({
                       ...day,
                       academics: { ...day.academics, subject: e.target.value },
-                    })
+                    }, day)
                   }
                   className="w-full px-3.5 py-2.5 bg-[#0b0e15] border border-[#232c3f] rounded-xl text-xs text-white focus:outline-none focus:border-indigo-500 cursor-pointer"
                 >
@@ -354,7 +369,7 @@ export const TrackView: React.FC<TrackViewProps> = ({ day, onUpdateDay, initialS
                     onUpdateDay({
                       ...day,
                       academics: { ...day.academics, timeSpent: e.target.value },
-                    })
+                    }, day)
                   }
                   placeholder="e.g. 90 minutes"
                   className="w-full px-3.5 py-2.5 bg-[#0b0e15] border border-[#232c3f] rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
@@ -371,7 +386,7 @@ export const TrackView: React.FC<TrackViewProps> = ({ day, onUpdateDay, initialS
                   onUpdateDay({
                     ...day,
                     academics: { ...day.academics, objective: e.target.value },
-                  })
+                  }, day)
                 }
                 placeholder="e.g. Master Simplex algorithm tableau pivot rules"
                 className="w-full px-3.5 py-2.5 bg-[#0b0e15] border border-[#232c3f] rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
@@ -387,7 +402,7 @@ export const TrackView: React.FC<TrackViewProps> = ({ day, onUpdateDay, initialS
                   onUpdateDay({
                     ...day,
                     academics: { ...day.academics, learned: e.target.value },
-                  })
+                  }, day)
                 }
                 placeholder="What did you learn from memory without looking at notes?..."
                 className="w-full px-3.5 py-2.5 bg-[#0b0e15] border border-[#232c3f] rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
@@ -460,7 +475,7 @@ export const TrackView: React.FC<TrackViewProps> = ({ day, onUpdateDay, initialS
                   onUpdateDay({
                     ...day,
                     project: { ...day.project, name: e.target.value },
-                  })
+                  }, day)
                 }
                 placeholder="e.g. Distributed Task Queue"
                 className="w-full px-3.5 py-2.5 bg-[#0b0e15] border border-[#232c3f] rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-sky-500"
@@ -476,7 +491,7 @@ export const TrackView: React.FC<TrackViewProps> = ({ day, onUpdateDay, initialS
                   onUpdateDay({
                     ...day,
                     project: { ...day.project, artifact: e.target.value },
-                  })
+                  }, day)
                 }
                 placeholder="What did you deploy, merge, or write tests for today?..."
                 className="w-full px-3.5 py-2.5 bg-[#0b0e15] border border-[#232c3f] rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-sky-500"

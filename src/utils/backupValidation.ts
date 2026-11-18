@@ -14,16 +14,20 @@ import {
   UserSettings,
 } from '../types';
 import { getPrescribedSetCount } from './workout';
+import {
+  validateCustomTrackerValues,
+  validateUserSystemConfiguration,
+} from '../services/systemConfiguration';
 
 export interface ValidationResult {
   valid: boolean;
   error?: string;
   sanitizedDays?: Record<string, DayRecord>;
-  sanitizedSettings?: UserSettings;
+  sanitizedSettings?: Partial<UserSettings>;
   stats?: {
     recordCount: number;
-    startDate: string;
-    endDate: string;
+    startDate?: string;
+    endDate?: string;
   };
 }
 
@@ -50,73 +54,328 @@ function isShortString(value: unknown, maxLength: number, required = false): val
 }
 
 function isTimestamp(value: unknown, required = true): value is string {
-  return isShortString(value, 64, required);
+  if (!isShortString(value, 64, required)) return false;
+  return (!required && value.length === 0) || Number.isFinite(Date.parse(value));
 }
 
-function sanitizeDailySystem(value: unknown): UserSettings['dailySystem'] {
-  if (!isRecord(value)) return undefined;
+function isCalendarDate(value: unknown): boolean {
+  if (typeof value !== 'string' || !ISO_DATE_REGEX.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day;
+}
 
+function validateStringFields(
+  value: Record<string, unknown>,
+  limits: Record<string, number>
+): boolean {
+  return Object.entries(limits).every(([key, maxLength]) => (
+    value[key] === undefined || isShortString(value[key], maxLength)
+  ));
+}
+
+function validateDayShape(day: Record<string, unknown>, dateKey: string): string | undefined {
+  const allowedFields = new Set([
+    'schemaVersion', 'date', 'dayOfWeek', 'completionPercentage', 'notes', 'mood', 'energy',
+    'sleep', 'dailyReflection', 'tomorrowFirstAction', 'schedule', 'habits', 'academics', 'dsa',
+    'workout', 'project', 'skills', 'dayStart', 'outcomes', 'focusSessions', 'recoveryDecisions',
+    'behavioralReview', 'tomorrowHandoff', 'creditEvents', 'customTrackerValues', 'syncRevision',
+    'createdAt', 'updatedAt', 'lastSyncedAt',
+  ]);
+  if (Object.keys(day).some((key) => !allowedFields.has(key))) return 'contains unsupported fields.';
+  if (day.date !== undefined && day.date !== dateKey) return 'date does not match its day key.';
+
+  const numericBounds: Record<string, [number, number]> = {
+    completionPercentage: [0, 100],
+    mood: [1, 5],
+    energy: [1, 5],
+    sleep: [1, 5],
+  };
+  for (const [field, [minimum, maximum]] of Object.entries(numericBounds)) {
+    const value = day[field];
+    if (value !== undefined && (
+      typeof value !== 'number' || !Number.isFinite(value) || value < minimum || value > maximum
+    )) return `${field} is outside its valid range.`;
+  }
+  if (day.schemaVersion !== undefined && (
+    !Number.isInteger(day.schemaVersion) || (day.schemaVersion as number) < 0 || (day.schemaVersion as number) > 100
+  )) return 'schemaVersion is invalid.';
+  if (day.syncRevision !== undefined && (
+    !Number.isInteger(day.syncRevision) || (day.syncRevision as number) < 0 || (day.syncRevision as number) > 2147483647
+  )) return 'syncRevision is invalid.';
+  if (day.createdAt !== undefined && !isTimestamp(day.createdAt)) return 'createdAt is invalid.';
+  if (day.updatedAt !== undefined && !isTimestamp(day.updatedAt)) return 'updatedAt is invalid.';
+  if (day.lastSyncedAt !== undefined && !isTimestamp(day.lastSyncedAt)) return 'lastSyncedAt is invalid.';
+  if (!validateStringFields(day, {
+    dayOfWeek: 20,
+    notes: 5000,
+    tomorrowFirstAction: 1000,
+  })) return 'contains an invalid text field.';
+
+  const objectFields = ['dailyReflection', 'academics', 'workout', 'project', 'skills'];
+  for (const field of objectFields) {
+    if (day[field] !== undefined && !isRecord(day[field])) return `${field} must be an object.`;
+  }
+  const arrays: Array<[string, number]> = [
+    ['schedule', 50],
+    ['habits', 50],
+    ['dsa', 50],
+  ];
+  for (const [field, maximum] of arrays) {
+    const value = day[field];
+    if (value !== undefined && (!Array.isArray(value) || value.length > maximum || value.some((entry) => !isRecord(entry)))) {
+      return `${field} must be a bounded list of objects.`;
+    }
+  }
+  if (isRecord(day.dailyReflection) && !validateStringFields(day.dailyReflection, {
+    academicLearned: 5000,
+    academicRetrieve: 5000,
+    academicWeak: 5000,
+    dsaProblem: 500,
+    dsaPattern: 200,
+    dsaInsight: 10000,
+    dsaMistake: 5000,
+    dsaReviewDate: 20,
+    projectArtifact: 5000,
+    tomorrowFirstAction: 1000,
+    notes: 10000,
+  })) return 'dailyReflection contains an invalid text field.';
+  if (isRecord(day.academics) && !validateStringFields(day.academics, {
+    subject: 100,
+    secondarySubject: 100,
+    objective: 2000,
+    learned: 5000,
+    retrieve: 5000,
+    weak: 5000,
+    output: 5000,
+    timeSpent: 50,
+  })) return 'academics contains an invalid text field.';
+  if (isRecord(day.project) && !validateStringFields(day.project, {
+    name: 200,
+    goal: 2000,
+    workedOn: 5000,
+    artifact: 5000,
+    blocker: 5000,
+    nextAction: 2000,
+  })) return 'project contains an invalid text field.';
+  if (isRecord(day.skills) && !validateStringFields(day.skills, {
+    topic: 200,
+    focus: 2000,
+    notes: 5000,
+  })) return 'skills contains an invalid text field.';
+  if (isRecord(day.workout)) {
+    if (
+      (day.workout.mode !== undefined && !['gym', 'home'].includes(String(day.workout.mode)))
+      || (day.workout.status !== undefined && !['not_started', 'in_progress', 'completed', 'partially_completed', 'skipped'].includes(String(day.workout.status)))
+      || (day.workout.exercises !== undefined && (
+        !Array.isArray(day.workout.exercises)
+        || day.workout.exercises.length > 30
+        || day.workout.exercises.some((exercise) => !isRecord(exercise))
+      ))
+      || (day.workout.dailyNonNegotiables !== undefined && (
+        !Array.isArray(day.workout.dailyNonNegotiables)
+        || day.workout.dailyNonNegotiables.length > 20
+        || day.workout.dailyNonNegotiables.some((item) => !isRecord(item))
+      ))
+    ) return 'workout has an invalid structure.';
+  }
+  const behavioralError = validateBehavioralFields(day);
+  if (behavioralError) return behavioralError;
+  return undefined;
+}
+
+function sanitizeDailySystem(value: unknown): UserSettings['dailySystem'] | null {
+  if (!isRecord(value)) return null;
   const categories: ScheduleItem['category'][] = ['wake', 'academic', 'break', 'workout', 'dsa', 'project', 'reading', 'sleep', 'other'];
-  const schedule: ScheduleItem[] = (Array.isArray(value.schedule) ? value.schedule : []).slice(0, 12).map((item, index) => {
-    const raw = isRecord(item) ? item : {};
-    const category = categories.includes(raw.category as ScheduleItem['category']) ? raw.category as ScheduleItem['category'] : 'other';
-    return {
-      id: sanitizeString(raw.id, 50) || `schedule-${index}`,
-      time: sanitizeString(raw.time, 50) || 'Flexible',
-      title: sanitizeString(raw.title, 200) || 'Focus Session',
-      category,
-      status: 'pending',
-    };
-  });
-  const habits: HabitItem[] = (Array.isArray(value.habits) ? value.habits : []).slice(0, 4).map((item, index) => {
-    const raw = isRecord(item) ? item : {};
-    const timeOfDay = ['morning', 'anytime', 'evening'].includes(String(raw.timeOfDay))
-      ? raw.timeOfDay as HabitItem['timeOfDay']
-      : undefined;
-    return {
-      id: sanitizeString(raw.id, 50) || `habit-${index}`,
-      title: sanitizeString(raw.title, 200) || 'Daily habit',
-      detail: sanitizeString(raw.detail, 500),
-      completed: false,
-      timeOfDay,
-    };
-  });
-  const nonNegotiables: NonNegotiableItem[] = (Array.isArray(value.nonNegotiables) ? value.nonNegotiables : []).slice(0, 3).map((item, index) => {
-    const raw = isRecord(item) ? item : {};
-    return {
-      id: sanitizeString(raw.id, 50) || `non-negotiable-${index}`,
-      name: sanitizeString(raw.name, 200) || 'Daily commitment',
-      target: sanitizeString(raw.target, 200),
-      completed: false,
-    };
-  });
-  const workoutExercises = (Array.isArray(value.workoutExercises) ? value.workoutExercises : []).slice(0, 10).map((item) => {
-    const raw = isRecord(item) ? item : {};
-    const target = sanitizeString(raw.target, 100) || 'Flexible';
-    return {
-      name: sanitizeString(raw.name, 200) || 'Exercise',
-      target,
-      sets: sanitizeNumber(raw.sets, 1, 10, getPrescribedSetCount(target)),
-    };
-  });
+  const keys = ['workoutMode', 'schedule', 'habits', 'nonNegotiables', 'workoutCycle', 'workoutExercises'];
+  if (
+    Object.keys(value).some((key) => !keys.includes(key))
+    || (value.workoutMode !== 'gym' && value.workoutMode !== 'home')
+    || !isShortString(value.workoutCycle, 200, true)
+    || !Array.isArray(value.schedule) || value.schedule.length < 1 || value.schedule.length > 50
+    || !Array.isArray(value.habits) || value.habits.length < 1 || value.habits.length > 30
+    || !Array.isArray(value.nonNegotiables) || value.nonNegotiables.length < 1 || value.nonNegotiables.length > 20
+    || !Array.isArray(value.workoutExercises) || value.workoutExercises.length < 1 || value.workoutExercises.length > 30
+  ) return null;
 
-  if (!schedule.length || !habits.length || !nonNegotiables.length || !workoutExercises.length) return undefined;
+  const schedule: ScheduleItem[] = [];
+  for (const item of value.schedule) {
+    if (
+      !isRecord(item)
+      || Object.keys(item).some((key) => !['id', 'time', 'title', 'category', 'status', 'note'].includes(key))
+      || !isShortString(item.id, 64, true) || !isShortString(item.time, 50, true)
+      || !isShortString(item.title, 200, true) || !categories.includes(item.category as ScheduleItem['category'])
+      || !['pending', 'completed', 'skipped'].includes(String(item.status))
+      || (item.note !== undefined && !isShortString(item.note, 500))
+    ) return null;
+    schedule.push({
+      id: item.id,
+      time: item.time,
+      title: sanitizeString(item.title, 200),
+      category: item.category as ScheduleItem['category'],
+      status: item.status as ScheduleItem['status'],
+      note: sanitizeString(item.note, 500),
+    });
+  }
+
+  const habits: HabitItem[] = [];
+  for (const item of value.habits) {
+    if (
+      !isRecord(item)
+      || Object.keys(item).some((key) => !['id', 'title', 'detail', 'completed', 'timeOfDay'].includes(key))
+      || !isShortString(item.id, 64, true) || !isShortString(item.title, 200, true)
+      || (item.detail !== undefined && !isShortString(item.detail, 500))
+      || typeof item.completed !== 'boolean'
+      || (item.timeOfDay !== undefined && !['morning', 'anytime', 'evening'].includes(String(item.timeOfDay)))
+    ) return null;
+    habits.push({
+      id: item.id,
+      title: sanitizeString(item.title, 200),
+      detail: sanitizeString(item.detail, 500),
+      completed: item.completed,
+      timeOfDay: item.timeOfDay as HabitItem['timeOfDay'],
+    });
+  }
+
+  const nonNegotiables: NonNegotiableItem[] = [];
+  for (const item of value.nonNegotiables) {
+    if (
+      !isRecord(item)
+      || Object.keys(item).some((key) => !['id', 'name', 'target', 'completed'].includes(key))
+      || !isShortString(item.id, 64, true) || !isShortString(item.name, 200, true)
+      || !isShortString(item.target, 200) || typeof item.completed !== 'boolean'
+    ) return null;
+    nonNegotiables.push({
+      id: item.id,
+      name: sanitizeString(item.name, 200),
+      target: sanitizeString(item.target, 200),
+      completed: item.completed,
+    });
+  }
+
+  const workoutExercises: NonNullable<UserSettings['dailySystem']>['workoutExercises'] = [];
+  for (const item of value.workoutExercises) {
+    if (
+      !isRecord(item)
+      || Object.keys(item).some((key) => !['name', 'target', 'sets'].includes(key))
+      || !isShortString(item.name, 200, true) || !isShortString(item.target, 100, true)
+      || !Number.isInteger(item.sets) || Number(item.sets) < 1 || Number(item.sets) > 10
+    ) return null;
+    workoutExercises.push({
+      name: sanitizeString(item.name, 200),
+      target: sanitizeString(item.target, 100),
+      sets: item.sets as number,
+    });
+  }
 
   return {
-    workoutMode: value.workoutMode === 'home' ? 'home' : 'gym',
+    workoutMode: value.workoutMode,
     schedule,
     habits,
     nonNegotiables,
-    workoutCycle: sanitizeString(value.workoutCycle, 200) || 'Personalized workout',
+    workoutCycle: sanitizeString(value.workoutCycle, 200),
     workoutExercises,
   };
+}
+
+function sanitizeBackupSettings(value: Record<string, unknown>): {
+  settings?: Partial<UserSettings>;
+  error?: string;
+} {
+  const allowedFields = new Set([
+    'defaultWorkoutMode', 'academicSchedule', 'dailySystem', 'theme',
+    'notificationsEnabled', 'systemConfiguration', 'customWallpaper',
+    'wallpaperBlur', 'wallpaperDim',
+  ]);
+  if (Object.keys(value).some((key) => !allowedFields.has(key))) {
+    return { error: 'The backup settings contain unsupported fields.' };
+  }
+
+  const settings: Partial<UserSettings> = {};
+  if (value.defaultWorkoutMode !== undefined) {
+    if (value.defaultWorkoutMode !== 'gym' && value.defaultWorkoutMode !== 'home') {
+      return { error: 'The backup workout mode is invalid.' };
+    }
+    settings.defaultWorkoutMode = value.defaultWorkoutMode;
+  }
+  if (value.theme !== undefined) {
+    if (value.theme !== 'dark' && value.theme !== 'light') {
+      return { error: 'The backup theme is invalid.' };
+    }
+    settings.theme = value.theme;
+  }
+  if (value.notificationsEnabled !== undefined) {
+    if (typeof value.notificationsEnabled !== 'boolean') {
+      return { error: 'The backup notification setting is invalid.' };
+    }
+    settings.notificationsEnabled = value.notificationsEnabled;
+  }
+  if (value.academicSchedule !== undefined) {
+    if (!isRecord(value.academicSchedule)) {
+      return { error: 'The backup academic schedule is invalid.' };
+    }
+    const academicSchedule: UserSettings['academicSchedule'] = {};
+    for (const [day, subjects] of Object.entries(value.academicSchedule)) {
+      if (
+        day.length > 20
+        || !isRecord(subjects)
+        || Object.keys(subjects).some((key) => key !== 'primary' && key !== 'secondary')
+        || !isShortString(subjects.primary, 100)
+        || !isShortString(subjects.secondary, 100)
+      ) return { error: `The backup academic schedule entry for "${day.slice(0, 20)}" is invalid.` };
+      academicSchedule[day] = {
+        primary: subjects.primary,
+        secondary: subjects.secondary,
+      };
+    }
+    settings.academicSchedule = academicSchedule;
+  }
+  if (value.dailySystem !== undefined) {
+    const dailySystem = sanitizeDailySystem(value.dailySystem);
+    if (!dailySystem) return { error: 'The backup daily system is invalid or contains unsupported fields.' };
+    settings.dailySystem = dailySystem;
+  }
+  if (value.systemConfiguration !== undefined) {
+    const systemConfiguration = validateUserSystemConfiguration(value.systemConfiguration);
+    if (!systemConfiguration) return { error: 'The backup system configuration is invalid.' };
+    settings.systemConfiguration = systemConfiguration;
+  }
+  if (value.customWallpaper !== undefined) {
+    if (typeof value.customWallpaper !== 'string' || value.customWallpaper.length > 4_000_000) {
+      return { error: 'The backup wallpaper is invalid or too large.' };
+    }
+    if (value.customWallpaper) {
+      const isRasterDataUrl = /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+=*$/.test(value.customWallpaper);
+      let isHttpsUrl = false;
+      try {
+        isHttpsUrl = new URL(value.customWallpaper).protocol === 'https:';
+      } catch {
+        isHttpsUrl = false;
+      }
+      if (!isRasterDataUrl && !isHttpsUrl) {
+        return { error: 'The backup wallpaper must be a safe HTTPS image URL or supported image data URL.' };
+      }
+    }
+    settings.customWallpaper = value.customWallpaper;
+  }
+  for (const [field, maximum] of [['wallpaperBlur', 20], ['wallpaperDim', 90]] as const) {
+    const setting = value[field];
+    if (setting === undefined) continue;
+    if (typeof setting !== 'number' || !Number.isFinite(setting) || setting < 0 || setting > maximum) {
+      return { error: `The backup ${field} setting is invalid.` };
+    }
+    Object.assign(settings, { [field]: setting });
+  }
+  return { settings };
 }
 
 function validateBehavioralFields(rawDay: Record<string, unknown>): string | undefined {
   if (rawDay.schemaVersion !== undefined && (!Number.isInteger(rawDay.schemaVersion) || (rawDay.schemaVersion as number) < 0 || (rawDay.schemaVersion as number) > 100)) return 'schemaVersion is invalid.';
   if (rawDay.dayStart !== undefined) {
     const value = rawDay.dayStart;
-    if (!isRecord(value) || !ISO_DATE_REGEX.test(String(value.date)) || !isTimestamp(value.startedAt) || !isTimestamp(value.acceptedAt) || !['normal', 'reduced', 'minimum'].includes(String(value.capacityMode)) || !isShortString(value.firstAction, 1000, true) || (value.implementationIntention !== undefined && !isShortString(value.implementationIntention, 1000))) return 'dayStart is invalid.';
+    if (!isRecord(value) || !isCalendarDate(value.date) || !isTimestamp(value.startedAt) || !isTimestamp(value.acceptedAt) || !['normal', 'reduced', 'minimum'].includes(String(value.capacityMode)) || !isShortString(value.firstAction, 1000, true) || (value.implementationIntention !== undefined && !isShortString(value.implementationIntention, 1000))) return 'dayStart is invalid.';
   }
   const arrays: Array<[keyof typeof BEHAVIORAL_LIMITS, unknown]> = [['outcomes', rawDay.outcomes], ['focusSessions', rawDay.focusSessions], ['recoveryDecisions', rawDay.recoveryDecisions], ['creditEvents', rawDay.creditEvents]];
   for (const [key, value] of arrays) if (value !== undefined && (!Array.isArray(value) || value.length > BEHAVIORAL_LIMITS[key])) return `${key} exceeds its safe limit.`;
@@ -132,6 +391,7 @@ function validateBehavioralFields(rawDay: Record<string, unknown>): string | und
     if (!isRecord(value) || !isTimestamp(value.createdAt) || !isShortString(value.firstAction, 1000, true) || (value.carryForwardOutcomeId !== undefined && !isValidBehavioralId(value.carryForwardOutcomeId)) || (value.blockerAction !== undefined && !isShortString(value.blockerAction, 1000)) || (value.dueReviewReference !== undefined && !isShortString(value.dueReviewReference, 500)) || (value.adjustment !== undefined && !isShortString(value.adjustment, 2000)) || (value.note !== undefined && !isShortString(value.note, 2000))) return 'tomorrowHandoff is invalid.';
   }
   if (Array.isArray(rawDay.creditEvents) && rawDay.creditEvents.some((v) => !isRecord(v) || !isValidBehavioralId(v.id) || !CREDIT_TYPES.includes(String(v.type)) || !isTimestamp(v.createdAt) || (v.sourceId !== undefined && !isValidBehavioralId(v.sourceId)) || (v.note !== undefined && !isShortString(v.note, 1000)))) return 'creditEvents contains an invalid entry.';
+  if (rawDay.customTrackerValues !== undefined && !validateCustomTrackerValues(rawDay.customTrackerValues)) return 'customTrackerValues is invalid.';
   return undefined;
 }
 
@@ -165,44 +425,66 @@ export function validateAndSanitizeBackup(rawContent: string): ValidationResult 
     return { valid: false, error: 'Backup payload exceeds maximum safe size (5MB).' };
   }
 
-  let json: any;
+  let json: unknown;
   try {
     json = JSON.parse(rawContent);
   } catch {
     return { valid: false, error: 'Malformed JSON syntax. Please provide a valid JSON backup file.' };
   }
 
-  if (!json || typeof json !== 'object' || Array.isArray(json)) {
+  if (!isRecord(json)) {
     return { valid: false, error: 'Invalid root structure: Expected a backup object.' };
   }
 
-  if (!json.days || typeof json.days !== 'object' || Array.isArray(json.days)) {
+  const allowedRootFields = new Set(['schemaVersion', 'manifest', 'exportDate', 'recordCount', 'settings', 'days']);
+  if (Object.keys(json).some((key) => !allowedRootFields.has(key))) {
+    return { valid: false, error: 'Backup contains unsupported top-level fields.' };
+  }
+  if (json.schemaVersion !== undefined && json.schemaVersion !== 1) {
+    return { valid: false, error: 'This backup version is not supported.' };
+  }
+  if (json.manifest !== undefined && !isShortString(json.manifest, 200, true)) {
+    return { valid: false, error: 'The backup manifest is invalid.' };
+  }
+  if (json.exportDate !== undefined && !isTimestamp(json.exportDate)) {
+    return { valid: false, error: 'The backup export date is invalid.' };
+  }
+  if (json.recordCount !== undefined && (
+    !Number.isInteger(json.recordCount) || (json.recordCount as number) < 0 || (json.recordCount as number) > 1000
+  )) {
+    return { valid: false, error: 'The backup record count is invalid.' };
+  }
+  if (!isRecord(json.days)) {
     return { valid: false, error: 'Invalid backup structure: "days" object is missing or invalid.' };
   }
 
-  const rawDays = json.days as Record<string, any>;
+  const rawDays = json.days;
   const dayKeys = Object.keys(rawDays);
-
-  if (dayKeys.length === 0) {
-    return { valid: false, error: 'Backup contains zero daily records.' };
-  }
-
   if (dayKeys.length > 1000) {
     return { valid: false, error: 'Backup contains more than 1,000 daily records. Exceeds safe import limits.' };
+  }
+  if (json.recordCount !== undefined && json.recordCount !== dayKeys.length) {
+    return { valid: false, error: 'The backup record count does not match its daily records.' };
+  }
+  const rawSettings = json.settings;
+  if (rawSettings !== undefined && !isRecord(rawSettings)) {
+    return { valid: false, error: 'The backup settings object is invalid.' };
   }
 
   const sanitizedDays: Record<string, DayRecord> = {};
   const sortedKeys: string[] = [];
 
   for (const dateKey of dayKeys) {
-    if (!ISO_DATE_REGEX.test(dateKey)) {
+    if (!isCalendarDate(dateKey)) {
       return { valid: false, error: `Invalid date key format "${dateKey.slice(0, 20)}". Expected YYYY-MM-DD.` };
     }
 
-    const rawDay = rawDays[dateKey];
-    if (!rawDay || typeof rawDay !== 'object' || Array.isArray(rawDay)) {
-      continue; // skip invalid day entry
-    }
+    const rawDayValue = rawDays[dateKey];
+    if (!isRecord(rawDayValue)) return { valid: false, error: `Daily record for ${dateKey} must be an object.` };
+    const rawDay = rawDayValue as Record<string, any>;
+
+    const shapeError = validateDayShape(rawDay, dateKey);
+    if (shapeError) return { valid: false, error: `Invalid daily record for ${dateKey}: ${shapeError}` };
 
     const behavioralError = validateBehavioralFields(rawDay as Record<string, unknown>);
     if (behavioralError) {
@@ -358,6 +640,9 @@ export function validateAndSanitizeBackup(rawContent: string): ValidationResult 
       behavioralReview: rawDay.behavioralReview as BehavioralReview | undefined,
       tomorrowHandoff: rawDay.tomorrowHandoff as TomorrowHandoff | undefined,
       creditEvents: rawDay.creditEvents as CreditEvent[] | undefined,
+      ...(rawDay.customTrackerValues === undefined
+        ? {}
+        : { customTrackerValues: validateCustomTrackerValues(rawDay.customTrackerValues) ?? [] }),
     };
 
     sanitizedDays[dateKey] = dayRecord;
@@ -366,16 +651,11 @@ export function validateAndSanitizeBackup(rawContent: string): ValidationResult 
   sortedKeys.sort();
 
   // Settings validation (optional)
-  let sanitizedSettings: UserSettings | undefined;
-  if (json.settings && typeof json.settings === 'object') {
-    const dailySystem = sanitizeDailySystem(json.settings.dailySystem);
-    sanitizedSettings = {
-      defaultWorkoutMode: json.settings.defaultWorkoutMode === 'home' ? 'home' : 'gym',
-      academicSchedule: typeof json.settings.academicSchedule === 'object' ? json.settings.academicSchedule : {},
-      ...(dailySystem ? { dailySystem } : {}),
-      theme: json.settings.theme === 'light' ? 'light' : 'dark',
-      notificationsEnabled: Boolean(json.settings.notificationsEnabled),
-    };
+  let sanitizedSettings: Partial<UserSettings> | undefined;
+  if (rawSettings !== undefined) {
+    const settingsResult = sanitizeBackupSettings(rawSettings as Record<string, unknown>);
+    if (settingsResult.error) return { valid: false, error: settingsResult.error };
+    sanitizedSettings = settingsResult.settings;
   }
 
   return {
@@ -384,8 +664,7 @@ export function validateAndSanitizeBackup(rawContent: string): ValidationResult 
     sanitizedSettings,
     stats: {
       recordCount: sortedKeys.length,
-      startDate: sortedKeys[0],
-      endDate: sortedKeys[sortedKeys.length - 1],
+      ...(sortedKeys.length ? { startDate: sortedKeys[0], endDate: sortedKeys[sortedKeys.length - 1] } : {}),
     },
   };
 }

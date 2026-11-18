@@ -231,6 +231,8 @@ export interface DayRecord {
   behavioralReview?: BehavioralReview;
   tomorrowHandoff?: TomorrowHandoff;
   creditEvents?: CreditEvent[];
+  customTrackerValues?: CustomTrackerValue[];
+  syncRevision?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -241,9 +243,38 @@ export interface UserSettings {
   dailySystem?: DailySystemTemplate;
   theme: 'dark' | 'light';
   notificationsEnabled?: boolean;
+  systemConfiguration?: UserSystemConfiguration;
   customWallpaper?: string; // Data URL or Image URL
   wallpaperBlur?: number;   // 0 to 20 px
   wallpaperDim?: number;    // 0 to 90 %
+}
+
+export type SystemModuleId = 'academics' | 'dsa' | 'workout' | 'projects' | 'insights';
+export type DashboardWidgetId = 'briefing' | 'commitments' | 'schedule' | 'workspaces' | 'goals' | 'custom_trackers';
+export type AiBehavior = 'enabled' | 'disabled';
+
+export interface CustomTrackerDefinition {
+  id: string;
+  name: string;
+  unit: string;
+  dailyTarget?: number;
+}
+
+export interface CustomTrackerValue {
+  trackerId: string;
+  value: number;
+}
+
+export interface UserSystemConfiguration {
+  schemaVersion: number;
+  enabledModules: SystemModuleId[];
+  dashboardLayout: DashboardWidgetId[];
+  customTrackers: CustomTrackerDefinition[];
+  goals: {
+    primary: string;
+    secondary: string[];
+  };
+  aiBehavior: AiBehavior;
 }
 
 export interface AuthUser {
@@ -283,4 +314,61 @@ export type TabType =
   | 'history'
   | 'settings';
 
-export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'error';
+export type SyncStatus = 'idle' | 'pending' | 'syncing' | 'offline' | 'conflict' | 'synced' | 'error';
+
+export type OnboardingStatus = 'not_started' | 'in_progress' | 'completed';
+
+export type OnboardingRole = 'student' | 'engineer' | 'founder' | 'creator' | 'fitness' | 'custom';
+export type OnboardingChronotype = 'early' | 'standard' | 'night';
+export type OnboardingCapacity = 'minimum' | 'moderate' | 'high';
+export type OnboardingPillar = 'dsa' | 'academics' | 'fitness' | 'projects' | 'reading';
+export type OnboardingPlanningStyle = 'minimal' | 'balanced' | 'structured';
+export type OnboardingAppPreference = 'daily_briefing' | 'gentle_prompts' | 'weekly_review' | 'ai_suggestions';
+
+export interface OnboardingAnswers {
+  schemaVersion: number;
+  targetRole: OnboardingRole;
+  customRoleTitle: string;
+  chronotype: OnboardingChronotype;
+  wakeTime: string;
+  sleepTime: string;
+  deepWorkCapacity: OnboardingCapacity;
+  availableHoursPerDay: number;
+  workDaysPerWeek: number;
+  fixedCommitments: string;
+  primaryGoal: string;
+  secondaryGoals: string;
+  trackingAreas: OnboardingPillar[];
+  workoutMode: WorkoutMode;
+  preferredSessionMinutes: 25 | 50 | 90;
+  planningStyle: OnboardingPlanningStyle;
+  appPreferences: OnboardingAppPreference[];
+  customInstructions: string;
+}
+
+export interface OnboardingRequirementsInterpretation {
+  summary: string;
+  priorityAreas: OnboardingPillar[];
+  constraints: string;
+}
+
+export interface OnboardingRequirements {
+  schemaVersion: number;
+  sourceAnswers: OnboardingAnswers;
+  interpretation: OnboardingRequirementsInterpretation;
+  source: 'gemini' | 'offline';
+  userConfirmed: boolean;
+  generatedAt: string;
+}
+
+export interface OnboardingProgress {
+  status: OnboardingStatus;
+  version: number;
+  currentStage: number;
+  startedAt?: string;
+  completedAt?: string;
+  updatedAt: string;
+  answers?: OnboardingAnswers;
+  requirements?: OnboardingRequirements;
+  systemConfiguration?: UserSystemConfiguration;
+}

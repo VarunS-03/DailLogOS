@@ -1,9 +1,9 @@
-import { GoogleGenAI } from '@google/genai';
 import { DayRecord, DailyReflection, DsaProblem, UserSettings } from '../types';
+import { reportAiFailure } from './aiDiagnostics';
 
 // Read API key from environment or localStorage if user set it in Settings
 export function getGeminiApiKey(): string {
-  const envKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
+  const envKey = import.meta.env.VITE_GEMINI_API_KEY || '';
   if (envKey && envKey.trim()) return envKey.trim();
   const localKey = localStorage.getItem('daily_os_gemini_api_key');
   return localKey ? localKey.trim() : '';
@@ -21,10 +21,25 @@ export function hasGeminiKey(): boolean {
   return !!getGeminiApiKey();
 }
 
-function getAiClient(): GoogleGenAI | null {
+async function getAiClient() {
   const apiKey = getGeminiApiKey();
   if (!apiKey) return null;
+  const { GoogleGenAI } = await import('@google/genai');
   return new GoogleGenAI({ apiKey });
+}
+
+async function waitForAiResponse<T>(request: Promise<T>, timeoutMs = 15_000): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      request,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('The AI request timed out.')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 }
 
 export interface AiBriefing {
@@ -43,10 +58,144 @@ export interface DsaAiAssistance {
   pitfallToAvoid: string;
 }
 
-export interface NaturalInputParsed {
-  type: 'dsa' | 'schedule' | 'habit' | 'workout' | 'reflection' | 'unknown';
-  summary: string;
-  data: any;
+export type NaturalInputParsed =
+  | {
+      type: 'dsa';
+      summary: string;
+      data: {
+        problem: string;
+        platform: DsaProblem['platform'];
+        difficulty: DsaProblem['difficulty'];
+        pattern: string;
+        solvedIndependently: boolean;
+      };
+    }
+  | { type: 'schedule'; summary: string; data: { note: string } }
+  | { type: 'unknown'; summary: string; data: { text: string } };
+
+function parseJsonRecord(text: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(text);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('The AI response must be a JSON object.');
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function readBoundedString(value: unknown, maximum: number): string | null {
+  return typeof value === 'string' && value.length <= maximum ? value : null;
+}
+
+export function parseDailyBriefingResponse(text: string): AiBriefing {
+  const data = parseJsonRecord(text);
+  const allowedKeys = ['headline', 'focusMessage', 'threePriorities', 'motivationalQuote'];
+  if (Object.keys(data).some((key) => !allowedKeys.includes(key))) throw new Error('The AI briefing contains unsupported fields.');
+  const headline = readBoundedString(data.headline, 300);
+  const focusMessage = readBoundedString(data.focusMessage, 1000);
+  const motivationalQuote = readBoundedString(data.motivationalQuote, 500);
+  const priorities = data.threePriorities;
+  if (
+    headline === null || focusMessage === null || motivationalQuote === null
+    || !Array.isArray(priorities) || priorities.length !== 3
+    || priorities.some((priority) => readBoundedString(priority, 300) === null)
+  ) throw new Error('The AI briefing does not match the supported format.');
+  return { headline, focusMessage, threePriorities: priorities as string[], motivationalQuote };
+}
+
+const REFLECTION_FIELD_LIMITS: Record<keyof DailyReflection, number> = {
+  academicLearned: 5000,
+  academicRetrieve: 5000,
+  academicWeak: 5000,
+  dsaProblem: 500,
+  dsaPattern: 200,
+  dsaInsight: 10000,
+  dsaMistake: 5000,
+  dsaReviewDate: 20,
+  projectArtifact: 5000,
+  tomorrowFirstAction: 1000,
+  notes: 10000,
+};
+
+export function parseAutoReflectionResponse(text: string): Partial<DailyReflection> {
+  const data = parseJsonRecord(text);
+  const result: Partial<DailyReflection> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (!(key in REFLECTION_FIELD_LIMITS)) throw new Error('The AI reflection contains unsupported fields.');
+    const safeValue = readBoundedString(value, REFLECTION_FIELD_LIMITS[key as keyof DailyReflection]);
+    if (safeValue === null) throw new Error('The AI reflection contains an invalid field.');
+    Object.assign(result, { [key]: safeValue });
+  }
+  if (Object.keys(result).length === 0) throw new Error('The AI reflection is empty.');
+  return result;
+}
+
+export function parseDsaAssistanceResponse(text: string): DsaAiAssistance {
+  const data = parseJsonRecord(text);
+  const limits: Record<keyof DsaAiAssistance, number> = {
+    patternDetected: 200,
+    recommendedApproach: 2000,
+    timeComplexityHint: 200,
+    spaceComplexityHint: 200,
+    keyObservation: 2000,
+    pitfallToAvoid: 2000,
+  };
+  const fields = Object.keys(limits) as Array<keyof DsaAiAssistance>;
+  if (Object.keys(data).some((key) => !fields.includes(key as keyof DsaAiAssistance))) {
+    throw new Error('The AI coaching response contains unsupported fields.');
+  }
+  const result = {} as DsaAiAssistance;
+  fields.forEach((field) => {
+    const value = readBoundedString(data[field], limits[field]);
+    if (value === null) throw new Error('The AI coaching response is incomplete or invalid.');
+    result[field] = value;
+  });
+  return result;
+}
+
+export function parseNaturalLanguageLogResponse(text: string, input: string): NaturalInputParsed {
+  const data = parseJsonRecord(text);
+  if (Object.keys(data).some((key) => !['type', 'summary', 'data'].includes(key))) {
+    throw new Error('The AI log response contains unsupported fields.');
+  }
+  const summary = readBoundedString(data.summary, 300);
+  if (summary === null || typeof data.data !== 'object' || data.data === null || Array.isArray(data.data)) {
+    throw new Error('The AI log response is incomplete.');
+  }
+  const payload = data.data as Record<string, unknown>;
+  if (data.type === 'dsa') {
+    const allowed = ['problem', 'platform', 'difficulty', 'pattern', 'solvedIndependently'];
+    if (Object.keys(payload).some((key) => !allowed.includes(key))) throw new Error('The AI DSA log contains unsupported fields.');
+    const problem = readBoundedString(payload.problem, 500);
+    const platform = payload.platform;
+    const difficulty = payload.difficulty;
+    const pattern = readBoundedString(payload.pattern, 200);
+    if (
+      !problem || !pattern
+      || !['LeetCode', 'Codeforces', 'GeeksforGeeks', 'NeetCode', 'Other'].includes(String(platform))
+      || !['Easy', 'Medium', 'Hard'].includes(String(difficulty))
+      || (payload.solvedIndependently !== undefined && typeof payload.solvedIndependently !== 'boolean')
+    ) throw new Error('The AI DSA log does not match the supported format.');
+    return {
+      type: 'dsa',
+      summary,
+      data: {
+        problem,
+        platform: platform as DsaProblem['platform'],
+        difficulty: difficulty as DsaProblem['difficulty'],
+        pattern,
+        solvedIndependently: typeof payload.solvedIndependently === 'boolean' ? payload.solvedIndependently : true,
+      },
+    };
+  }
+  if (data.type === 'schedule') {
+    if (Object.keys(payload).some((key) => key !== 'note')) throw new Error('The AI schedule log contains unsupported fields.');
+    const note = readBoundedString(payload.note, 1000);
+    if (!note) throw new Error('The AI schedule log does not match the supported format.');
+    return { type: 'schedule', summary, data: { note } };
+  }
+  if (!['habit', 'workout', 'reflection', 'unknown'].includes(String(data.type))) {
+    throw new Error('The AI log response has an unsupported type.');
+  }
+  return { type: 'unknown', summary, data: { text: input.slice(0, 2000) } };
 }
 
 /**
@@ -58,7 +207,7 @@ export async function generateDailyBriefing(
   yesterday?: DayRecord | null,
   settings?: UserSettings
 ): Promise<AiBriefing> {
-  const ai = getAiClient();
+  const ai = await getAiClient();
   const userName = 'friend';
 
   if (!ai) {
@@ -101,16 +250,15 @@ Return ONLY valid JSON matching this schema without markdown code blocks:
   "motivationalQuote": "A punchy, meaningful 1-sentence mindset quote"
 }`;
 
-    const response = await ai.models.generateContent({
+    const response = await waitForAiResponse(ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: prompt,
       config: { responseMimeType: 'application/json' },
-    });
+    }));
 
-    const text = response.text || '';
-    return JSON.parse(text);
+    return parseDailyBriefingResponse(response.text || '');
   } catch (err) {
-    console.warn('AI Briefing fallback used:', err);
+    reportAiFailure('briefing', err);
     return {
       headline: `Welcome to your ${day.dayOfWeek} command center`,
       focusMessage: 'Take it one block at a time. Progress is built on small, continuous actions.',
@@ -131,7 +279,7 @@ export async function generateAutoReflection(day: DayRecord): Promise<Partial<Da
   const workoutDone = day.workout?.status === 'completed';
   const academicSubject = day.academics?.subject || 'Academics';
 
-  const ai = getAiClient();
+  const ai = await getAiClient();
 
   if (!ai) {
     // Intelligent heuristic synthesis
@@ -175,16 +323,15 @@ Return ONLY valid JSON with these keys without markdown code blocks:
   "notes": "Holistic, constructive reflection on discipline and energy management today"
 }`;
 
-    const response = await ai.models.generateContent({
+    const response = await waitForAiResponse(ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: prompt,
       config: { responseMimeType: 'application/json' },
-    });
+    }));
 
-    const text = response.text || '';
-    return JSON.parse(text);
+    return parseAutoReflectionResponse(response.text || '');
   } catch (err) {
-    console.warn('AI Reflection fallback used:', err);
+    reportAiFailure('reflection', err);
     return {
       tomorrowFirstAction: 'Review top objective with fresh mind in the morning block',
       notes: `Finished today with ${day.completionPercentage}% completion. Continuous consistency over intensity.`,
@@ -197,7 +344,7 @@ Return ONLY valid JSON with these keys without markdown code blocks:
  * algorithmic approach, and common pitfalls without spoiling the entire solution immediately.
  */
 export async function assistDsaProblem(problemTitle: string, platform: string, difficulty: string): Promise<DsaAiAssistance> {
-  const ai = getAiClient();
+  const ai = await getAiClient();
 
   if (!ai) {
     // Intelligent heuristic defaults based on common keywords
@@ -249,16 +396,15 @@ Return ONLY valid JSON matching this schema without markdown code blocks:
   "pitfallToAvoid": "The most common edge case or trap that causes Wrong Answer/TLE"
 }`;
 
-    const response = await ai.models.generateContent({
+    const response = await waitForAiResponse(ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: prompt,
       config: { responseMimeType: 'application/json' },
-    });
+    }));
 
-    const text = response.text || '';
-    return JSON.parse(text);
+    return parseDsaAssistanceResponse(response.text || '');
   } catch (err) {
-    console.warn('AI DSA helper error:', err);
+    reportAiFailure('DSA helper', err);
     return {
       patternDetected: 'Algorithmic Pattern',
       recommendedApproach: 'Break down subproblems, test constraints, and implement clean helper functions.',
@@ -276,7 +422,7 @@ Return ONLY valid JSON matching this schema without markdown code blocks:
  * -> automatically structures data into DayRecord update
  */
 export async function parseNaturalLanguageLog(input: string): Promise<NaturalInputParsed> {
-  const ai = getAiClient();
+  const ai = await getAiClient();
   const trimmed = input.trim();
 
   if (!ai) {
@@ -313,13 +459,13 @@ Return ONLY valid JSON matching this schema:
   "data": {}
 }`;
 
-    const response = await ai.models.generateContent({
+    const response = await waitForAiResponse(ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: prompt,
       config: { responseMimeType: 'application/json' },
-    });
+    }));
 
-    return JSON.parse(response.text || '{}');
+    return parseNaturalLanguageLogResponse(response.text || '{}', trimmed);
   } catch (err) {
     return {
       type: 'unknown',

@@ -1,13 +1,15 @@
-import { GoogleGenAI } from '@google/genai';
 import { getGeminiApiKey } from './ai';
+import { reportAiFailure } from './aiDiagnostics';
 import { ScheduleItem, NonNegotiableItem, HabitItem, WorkoutMode } from '../types';
 import { CALISTHENICS_WORKOUT_PLANS, GYM_WORKOUT_PLANS } from '../constants/templates';
 import { getPrescribedSetCount } from '../utils/workout';
 
 export interface UserOnboardingProfile {
-  targetRole: 'engineer' | 'student' | 'founder' | 'creator' | 'custom';
+  targetRole: 'engineer' | 'student' | 'founder' | 'creator' | 'fitness' | 'custom';
   customRoleTitle?: string;
   chronotype: 'early' | 'standard' | 'night';
+  wakeTime?: string;
+  sleepTime?: string;
   deepWorkCapacity: 'minimum' | 'moderate' | 'high'; // 1-2h, 3-4h, 5-6h
   pillars: ('dsa' | 'academics' | 'fitness' | 'projects' | 'reading')[];
   primaryGoal: string;
@@ -32,6 +34,68 @@ export interface GeneratedSystemArchetype {
   generationMode: 'ai' | 'offline';
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+export function parseGeneratedSystemCandidate(value: unknown): Partial<GeneratedSystemArchetype> | null {
+  if (!isRecord(value)) return null;
+  const rootKeys = ['briefingTagline', 'workoutCycle', 'workoutExercises', 'schedule', 'nonNegotiables', 'habits'];
+  if (!hasOnlyKeys(value, rootKeys)) return null;
+  const readText = (input: unknown, maximum: number): input is string => (
+    typeof input === 'string' && input.trim().length > 0 && input.length <= maximum
+  );
+  const arrays = [value.schedule, value.nonNegotiables, value.habits, value.workoutExercises];
+  if (
+    !readText(value.briefingTagline, 300)
+    || !readText(value.workoutCycle, 200)
+    || arrays.some((items) => !Array.isArray(items))
+    || (value.schedule as unknown[]).length < 1 || (value.schedule as unknown[]).length > 12
+    || (value.nonNegotiables as unknown[]).length < 1 || (value.nonNegotiables as unknown[]).length > 3
+    || (value.habits as unknown[]).length < 1 || (value.habits as unknown[]).length > 4
+    || (value.workoutExercises as unknown[]).length < 1 || (value.workoutExercises as unknown[]).length > 10
+  ) return null;
+
+  const categories: ScheduleItem['category'][] = ['wake', 'academic', 'break', 'workout', 'dsa', 'project', 'reading', 'sleep', 'other'];
+  const schedule = (value.schedule as unknown[]).map((item) => {
+    if (!isRecord(item) || !hasOnlyKeys(item, ['id', 'time', 'title', 'category', 'status'])) return null;
+    if (
+      !readText(item.id, 64) || !readText(item.time, 50) || !readText(item.title, 200)
+      || !categories.includes(item.category as ScheduleItem['category'])
+      || !['pending', 'completed', 'skipped'].includes(String(item.status))
+    ) return null;
+    return { id: item.id, time: item.time, title: item.title, category: item.category as ScheduleItem['category'], status: item.status as ScheduleItem['status'] };
+  });
+  const habits = (value.habits as unknown[]).map((item) => {
+    if (!isRecord(item) || !hasOnlyKeys(item, ['id', 'title', 'detail', 'completed'])) return null;
+    if (!readText(item.id, 64) || !readText(item.title, 200) || !readText(item.detail, 500) || typeof item.completed !== 'boolean') return null;
+    return { id: item.id, title: item.title, detail: item.detail, completed: item.completed };
+  });
+  const nonNegotiables = (value.nonNegotiables as unknown[]).map((item) => {
+    if (!isRecord(item) || !hasOnlyKeys(item, ['id', 'name', 'target', 'completed'])) return null;
+    if (!readText(item.id, 64) || !readText(item.name, 200) || !readText(item.target, 200) || typeof item.completed !== 'boolean') return null;
+    return { id: item.id, name: item.name, target: item.target, completed: item.completed };
+  });
+  const workoutExercises = (value.workoutExercises as unknown[]).map((item) => {
+    if (!isRecord(item) || !hasOnlyKeys(item, ['name', 'target', 'sets'])) return null;
+    if (!readText(item.name, 200) || !readText(item.target, 100) || !Number.isInteger(item.sets) || Number(item.sets) < 1 || Number(item.sets) > 10) return null;
+    return { name: item.name, target: item.target, sets: item.sets as number };
+  });
+  if (schedule.some((item) => !item) || habits.some((item) => !item) || nonNegotiables.some((item) => !item) || workoutExercises.some((item) => !item)) return null;
+  return {
+    briefingTagline: value.briefingTagline,
+    workoutCycle: value.workoutCycle,
+    schedule: schedule as ScheduleItem[],
+    habits: habits as HabitItem[],
+    nonNegotiables: nonNegotiables as NonNegotiableItem[],
+    workoutExercises: workoutExercises as GeneratedWorkoutExercise[],
+  };
+}
+
 /**
  * Stage 1: Behavioral Profiler Agent
  * Converts raw choices into chronobiological constraints
@@ -43,7 +107,14 @@ export function agentBehavioralProfiler(profile: UserOnboardingProfile) {
     night: { wake: '09:00', sleep: '01:30', peakEnergy: '14:00–17:00' },
   };
 
-  const scheduleSlots = wakeTimes[profile.chronotype] || wakeTimes.standard;
+  const defaultScheduleSlots = wakeTimes[profile.chronotype] || wakeTimes.standard;
+  const isClockTime = (value: string | undefined): value is string =>
+    typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+  const scheduleSlots = {
+    ...defaultScheduleSlots,
+    wake: isClockTime(profile.wakeTime) ? profile.wakeTime : defaultScheduleSlots.wake,
+    sleep: isClockTime(profile.sleepTime) ? profile.sleepTime : defaultScheduleSlots.sleep,
+  };
 
   return {
     ...profile,
@@ -67,6 +138,7 @@ export async function agentSystemArchitect(
   }
 
   try {
+    const { GoogleGenAI } = await import('@google/genai');
     const ai = new GoogleGenAI({ apiKey });
     const prompt = `You are an expert behavioral architect and productivity engineer.
 Generate an optimal, non-burnout master daily routine for this user profile:
@@ -105,9 +177,10 @@ Return ONLY valid JSON with this exact structure without markdown backticks or c
 }`;
 
     // Add a strict 15s timeout to avoid hanging UI
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('AI request timeout')), 15000)
-    );
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error('AI request timeout')), 15000);
+    });
 
     const apiPromise = ai.models.generateContent({
       model: 'gemini-2.5-flash',
@@ -115,20 +188,25 @@ Return ONLY valid JSON with this exact structure without markdown backticks or c
       config: { responseMimeType: 'application/json' },
     });
 
-    const response = await Promise.race([apiPromise, timeoutPromise]);
+    let response: Awaited<typeof apiPromise>;
+    try {
+      response = await Promise.race([apiPromise, timeoutPromise]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
     const cleanText = (response.text || '').trim().replace(/^```json\s*/i, '').replace(/\s*```$/i, '');
-    const parsed = JSON.parse(cleanText);
+    const candidate = parseGeneratedSystemCandidate(JSON.parse(cleanText) as unknown);
 
-    if (!parsed || !Array.isArray(parsed.schedule)) {
+    if (!candidate) {
       throw new Error('Invalid schema from AI');
     }
 
     return {
-      ...agentCognitiveGovernor(parsed, generateDeterministicArchetype(profilerOutput)),
+      ...agentCognitiveGovernor(candidate, generateDeterministicArchetype(profilerOutput)),
       generationMode: 'ai',
     };
   } catch (err) {
-    console.warn('AI Onboarding error, applying deterministic fallback:', err);
+    reportAiFailure('onboarding', err);
     return generateDeterministicArchetype(profilerOutput);
   }
 }

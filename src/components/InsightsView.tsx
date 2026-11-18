@@ -14,21 +14,34 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { DayRecord, DailyReflection } from '../types';
+import { DayHistorySource, describeHistoryCoverage } from '../utils/dayHistory';
 import { generateAutoReflection, analyzeWeeklyPatterns, WeeklyInsight } from '../services/ai';
 import confetti from 'canvas-confetti';
 
 interface InsightsViewProps {
   day: DayRecord;
   allDays: Record<string, DayRecord>;
-  onUpdateDay: (updatedDay: DayRecord) => Promise<void>;
+  historyComplete: boolean;
+  historySource: DayHistorySource;
+  historyLoading: boolean;
+  historyError: string | null;
+  onLoadOlderHistory: () => void;
+  onUpdateDay: (updatedDay: DayRecord, baseDay?: DayRecord) => Promise<void>;
   onSelectDate: (dateStr: string) => void;
+  aiEnabled: boolean;
 }
 
 export const InsightsView: React.FC<InsightsViewProps> = ({
   day,
   allDays,
+  historyComplete,
+  historySource,
+  historyLoading,
+  historyError,
+  onLoadOlderHistory,
   onUpdateDay,
   onSelectDate,
+  aiEnabled,
 }) => {
   const [activeTab, setActiveTab] = useState<'reflection' | 'trends' | 'history'>('reflection');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -40,6 +53,7 @@ export const InsightsView: React.FC<InsightsViewProps> = ({
 
   // Trigger celebration on completing review
   const handleTriggerReflectionAi = async () => {
+    if (!aiEnabled) return;
     setIsGenerating(true);
     try {
       const generated = await generateAutoReflection(day);
@@ -51,7 +65,7 @@ export const InsightsView: React.FC<InsightsViewProps> = ({
         },
         tomorrowFirstAction: generated.tomorrowFirstAction || day.tomorrowFirstAction,
         notes: generated.notes || day.notes,
-      });
+      }, day);
 
       // Micro-celebration
       confetti({
@@ -80,6 +94,19 @@ export const InsightsView: React.FC<InsightsViewProps> = ({
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6">
+      <div
+        role="status"
+        className={`mb-4 rounded-xl border px-4 py-3 text-xs ${historyComplete
+          ? 'border-emerald-700/40 bg-emerald-950/15 text-emerald-100'
+          : 'border-amber-700/40 bg-amber-950/20 text-amber-100'}`}
+      >
+          {describeHistoryCoverage({
+            loadedCount: allDaysList.length,
+            complete: historyComplete,
+            source: historySource,
+          })}
+          {historyError && <span className="block mt-1 text-rose-200">{historyError}</span>}
+      </div>
       {/* Top Navigation */}
       <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-[#11141c] border border-[#1f2638] mb-6">
         <button
@@ -123,7 +150,7 @@ export const InsightsView: React.FC<InsightsViewProps> = ({
       {activeTab === 'reflection' && (
         <div className="space-y-5">
           {/* AI Synthesis Callout */}
-          <div className="p-5 rounded-2xl bg-gradient-to-r from-purple-950/40 via-[#141724] to-[#121520] border border-purple-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-lg">
+          {aiEnabled && <div className="p-5 rounded-2xl bg-gradient-to-r from-purple-950/40 via-[#141724] to-[#121520] border border-purple-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-lg">
             <div>
               <div className="flex items-center gap-2 text-purple-300 font-semibold text-xs mb-1 font-mono uppercase tracking-wider">
                 <Sparkles className="w-4 h-4 text-purple-400 animate-pulse" />
@@ -143,7 +170,7 @@ export const InsightsView: React.FC<InsightsViewProps> = ({
               <RefreshCw className={`w-4 h-4 ${isGenerating ? 'animate-spin' : ''}`} />
               <span>{isGenerating ? 'Generating...' : 'Auto-Fill Reflection'}</span>
             </button>
-          </div>
+          </div>}
 
           {/* Biological State */}
           <div className="p-5 rounded-2xl bg-[#131722] border border-[#20283c]">
@@ -158,7 +185,7 @@ export const InsightsView: React.FC<InsightsViewProps> = ({
                   {[1, 2, 3, 4, 5].map((val) => (
                     <button
                       key={val}
-                      onClick={() => onUpdateDay({ ...day, mood: val })}
+                      onClick={() => onUpdateDay({ ...day, mood: val }, day)}
                       className={`flex-1 py-2 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer ${
                         day.mood === val
                           ? 'bg-purple-600 text-white shadow-md'
@@ -178,7 +205,7 @@ export const InsightsView: React.FC<InsightsViewProps> = ({
                   {[1, 2, 3, 4, 5].map((val) => (
                     <button
                       key={val}
-                      onClick={() => onUpdateDay({ ...day, energy: val })}
+                      onClick={() => onUpdateDay({ ...day, energy: val }, day)}
                       className={`flex-1 py-2 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer ${
                         day.energy === val
                           ? 'bg-amber-600 text-white shadow-md'
@@ -198,7 +225,7 @@ export const InsightsView: React.FC<InsightsViewProps> = ({
                   {[1, 2, 3, 4, 5].map((val) => (
                     <button
                       key={val}
-                      onClick={() => onUpdateDay({ ...day, sleep: val })}
+                      onClick={() => onUpdateDay({ ...day, sleep: val }, day)}
                       className={`flex-1 py-2 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer ${
                         day.sleep === val
                           ? 'bg-indigo-600 text-white shadow-md'
@@ -224,7 +251,7 @@ export const InsightsView: React.FC<InsightsViewProps> = ({
             <input
               type="text"
               value={day.tomorrowFirstAction || ''}
-              onChange={(e) => onUpdateDay({ ...day, tomorrowFirstAction: e.target.value })}
+              onChange={(e) => onUpdateDay({ ...day, tomorrowFirstAction: e.target.value }, day)}
               placeholder="e.g. 06:00 AM — Solve Simplex tableau problem 3"
               className="w-full px-3.5 py-2.5 bg-[#0b0e15] border border-[#232c3f] rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-purple-500"
             />
@@ -238,7 +265,7 @@ export const InsightsView: React.FC<InsightsViewProps> = ({
             <textarea
               rows={4}
               value={day.notes || ''}
-              onChange={(e) => onUpdateDay({ ...day, notes: e.target.value })}
+              onChange={(e) => onUpdateDay({ ...day, notes: e.target.value }, day)}
               placeholder="Overall qualitative synthesis of focus, discipline, and takeaways..."
               className="w-full px-3.5 py-2.5 bg-[#0b0e15] border border-[#232c3f] rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-purple-500 leading-relaxed"
             />
@@ -323,6 +350,22 @@ export const InsightsView: React.FC<InsightsViewProps> = ({
               </div>
             ))}
           </div>
+          {!historyComplete && (
+            <button
+              type="button"
+              onClick={onLoadOlderHistory}
+              disabled={historyLoading}
+              className="w-full rounded-xl border border-zinc-700 bg-[#131722] px-4 py-3 text-xs font-medium text-zinc-200 hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-60"
+            >
+              {historyLoading
+                ? 'Loading history…'
+                : historySource === 'cache'
+                  ? 'Retry cloud history / load older cached records'
+                  : historySource === 'local'
+                    ? 'Load older local history'
+                    : 'Load older history'}
+            </button>
+          )}
         </div>
       )}
     </div>

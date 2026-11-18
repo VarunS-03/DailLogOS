@@ -1,5 +1,4 @@
 import React, { useEffect, useRef } from 'react';
-import * as THREE from 'three';
 
 interface FluidBackgroundProps {
   customWallpaper?: string;
@@ -29,6 +28,10 @@ export const FluidBackground: React.FC<FluidBackgroundProps> = ({
     const isLowPower = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (isLowPower) return;
 
+    let active = true;
+    let disposeRenderer: (() => void) | undefined;
+    void import('three').then((THREE) => {
+      if (!active) return;
     const scene = new THREE.Scene();
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, powerPreference: 'low-power' });
@@ -106,7 +109,7 @@ export const FluidBackground: React.FC<FluidBackgroundProps> = ({
 
     animationId = requestAnimationFrame(animate);
 
-    return () => {
+    disposeRenderer = () => {
       cancelAnimationFrame(animationId);
       window.removeEventListener('resize', handleResize);
       renderer.dispose();
@@ -115,6 +118,14 @@ export const FluidBackground: React.FC<FluidBackgroundProps> = ({
       if (container.contains(renderer.domElement)) {
         container.removeChild(renderer.domElement);
       }
+    };
+    }).catch(() => {
+      // Keep the dashboard usable if WebGL or the optional background chunk is unavailable.
+    });
+
+    return () => {
+      active = false;
+      disposeRenderer?.();
     };
   }, [customWallpaper]);
 

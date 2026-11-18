@@ -26,7 +26,7 @@ export function BehavioralCommandCenter({
   onUpdateDay,
 }: {
   day: DayRecord;
-  onUpdateDay: (day: DayRecord) => Promise<void>;
+  onUpdateDay: (day: DayRecord, baseDay?: DayRecord) => Promise<void>;
 }) {
   const [capacity, setCapacity] = useState<CapacityMode>(day.dayStart?.capacityMode ?? 'normal');
   const [starting, setStarting] = useState(!day.dayStart);
@@ -99,7 +99,7 @@ export function BehavioralCommandCenter({
     setRetryPatch(patch);
 
     try {
-      await onUpdateDay({ ...day, ...patch });
+      await onUpdateDay({ ...day, ...patch }, day);
       setSaveState('idle');
       setRetryPatch(null);
     } catch (error) {

@@ -1,5 +1,7 @@
 # DAILY OS — Security Audit & Hardening Checklist
 
+> **Updated against the Phase 9.1–16 implementation.** This checklist records code and emulator evidence; it does not establish that live Firebase rules, App Check, OAuth, or Gemini settings are deployed and verified. See [production acceptance](docs/PRODUCTION_ACCEPTANCE.md).
+
 This checklist verifies the security posture of the DAILY OS application. Use this document during audits, pre-deployment reviews, and continuous security maintenance.
 
 ---
@@ -29,19 +31,23 @@ This checklist verifies the security posture of the DAILY OS application. Use th
 ## 4. Backup, Import & Export Security
 - [x] **File Size Barrier**: Reject uploaded JSON files exceeding 5MB.
 - [x] **Schema Validation**: Validates JSON structure using `backupValidation.ts` before parsing or hydrating into application state.
-- [x] **Content Sanitization**: Neutralizes `<script>`, `javascript:`, and unsafe inline handlers in text strings.
-- [x] **User Re-Scoping**: Imported data is assigned to the current user's authenticated UID, preventing multi-tenant data leaks.
+- [x] **Schema and bounds validation**: Rejects unsupported fields, invalid types, oversized input, and malformed records before import. Text remains user content; this is not a general HTML sanitizer.
+- [x] **User scoping**: Imported records are written through the current account's storage path; backup records do not carry a user UID field.
 - [x] **Clean Export**: JSON export structures only the current authenticated user's records and settings.
 
 ## 5. Local Device Privacy & Multi-User Protection
 - [x] **Isolated Key Namespaces**: Keys prefixed by `daily_os_day_${uid}_${date}`.
 - [x] **Sign-Out Cache Wipe**: Removes all stored day records and settings for the user on logout.
-- [x] **Permanent Purge**: "Delete Account & Data" deletes both Cloud Firestore documents and device caches.
+- [x] **Deletion lifecycle**: Creates an immutable Firestore tombstone, removes profile and user data, clears device cache, then requests Firebase Authentication deletion. Live Auth/recent-login behavior remains unverified.
 
 ## 6. App Check & Client Integrity
-- [x] **reCAPTCHA Provider**: Integrated with Firebase App Check (`ReCaptchaV3Provider`).
-- [x] **Safe Fallback**: App remains functional if App Check is not configured in local development, while enforcing token checks when deployed.
+- [x] **Optional client initialization**: Firebase App Check's reCAPTCHA v3 client initializes when `VITE_FIREBASE_RECAPTCHA_SITE_KEY` is configured; development debug tokens are limited to Vite development mode.
+- [ ] **Project-side enforcement**: Configure and verify App Check enforcement in the Firebase console for production services. Client initialization alone does not enforce requests; this has not been verified against a live project.
 
 ## 7. Error Handling & Information Leakage
 - [x] **Sanitized Error Logging**: `handleFirestoreError` prevents leaking PII, private thoughts, or sensitive internal paths into browser logs.
 - [x] **Friendly User Messages**: Generic, helpful feedback presented to users during permission denials or network drops.
+
+## 8. Client Key Handling
+- [x] **Client visibility documented**: Firebase web configuration and Gemini keys are treated as client-visible; UI-entered Gemini keys are stored in browser local storage.
+- [ ] **Production Gemini key strategy**: Apply provider-side restrictions and quotas, or use a trusted backend if the Gemini key must remain secret.

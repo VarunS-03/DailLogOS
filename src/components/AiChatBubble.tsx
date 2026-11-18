@@ -12,14 +12,32 @@ import {
   KeyRound,
 } from 'lucide-react';
 import { hasGeminiKey, parseNaturalLanguageLog, NaturalInputParsed, setGeminiApiKey } from '../services/ai';
+import { reportAiFailure } from '../services/aiDiagnostics';
 import { AppCustomizationResult, customizeAppFromCommand } from '../services/appCustomization';
-import { DayRecord, DsaProblem, ScheduleItem, UserSettings } from '../types';
+import {
+  DASHBOARD_WIDGET_REGISTRY,
+  getSystemConfiguration,
+  SYSTEM_MODULE_REGISTRY,
+} from '../services/systemConfiguration';
+import { DayRecord, DsaProblem, ScheduleItem, UserSettings, UserSystemConfiguration } from '../types';
+
+interface PendingCustomizationProposal {
+  result: AppCustomizationResult;
+  baseDay: DayRecord;
+  baseSettings: {
+    defaultWorkoutMode: UserSettings['defaultWorkoutMode'];
+    dailySystem: UserSettings['dailySystem'];
+    systemConfiguration: UserSystemConfiguration;
+  };
+}
 
 interface AiChatBubbleProps {
   day: DayRecord;
-  onUpdateDay: (updatedDay: DayRecord) => Promise<void>;
+  onUpdateDay: (updatedDay: DayRecord, baseDay?: DayRecord) => Promise<void>;
   settings: UserSettings;
   onUpdateSettings: (settings: UserSettings) => Promise<void>;
+  initiallyOpen?: boolean;
+  onInitialOpenConsumed?: () => void;
 }
 
 export const AiChatBubble: React.FC<AiChatBubbleProps> = ({
@@ -27,8 +45,10 @@ export const AiChatBubble: React.FC<AiChatBubbleProps> = ({
   onUpdateDay,
   settings,
   onUpdateSettings,
+  initiallyOpen = false,
+  onInitialOpenConsumed,
 }) => {
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(initiallyOpen);
   const [mode, setMode] = useState<'customize' | 'log'>('customize');
   const [query, setQuery] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -37,6 +57,11 @@ export const AiChatBubble: React.FC<AiChatBubbleProps> = ({
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [keyConnected, setKeyConnected] = useState(() => hasGeminiKey());
   const [showKeyForm, setShowKeyForm] = useState(() => !hasGeminiKey());
+  const [proposal, setProposal] = useState<PendingCustomizationProposal | null>(null);
+
+  React.useEffect(() => {
+    if (initiallyOpen) onInitialOpenConsumed?.();
+  }, [initiallyOpen, onInitialOpenConsumed]);
 
   const saveApiKey = (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,12 +88,12 @@ export const AiChatBubble: React.FC<AiChatBubbleProps> = ({
       if (parsed.type === 'dsa') {
         const newProblem: DsaProblem = {
           id: `dsa-ai-${Date.now()}`,
-          problem: parsed.data?.problem || query,
-          platform: parsed.data?.platform || 'LeetCode',
-          difficulty: parsed.data?.difficulty || 'Medium',
-          pattern: parsed.data?.pattern || 'Algorithmic Pattern',
+          problem: parsed.data.problem,
+          platform: parsed.data.platform,
+          difficulty: parsed.data.difficulty,
+          pattern: parsed.data.pattern,
           firstIdea: '',
-          solvedIndependently: parsed.data?.solvedIndependently ?? true,
+          solvedIndependently: parsed.data.solvedIndependently,
           failureMistake: '',
           insight: 'Logged via Quick AI assistant',
           algorithm: '',
@@ -80,30 +105,30 @@ export const AiChatBubble: React.FC<AiChatBubbleProps> = ({
         };
 
         const updatedDsa = [...(day.dsa || []), newProblem];
-        await onUpdateDay({ ...day, dsa: updatedDsa });
+        await onUpdateDay({ ...day, dsa: updatedDsa }, day);
         setFeedback(`Logged "${newProblem.problem}" into DSA Practice!`);
       } else if (parsed.type === 'schedule') {
         const newSched: ScheduleItem = {
           id: `sched-ai-${Date.now()}`,
           time: 'Flexible',
-          title: parsed.data?.note || query,
+          title: parsed.data.note,
           category: 'other',
           status: 'completed',
         };
         const updatedSched = [...(day.schedule || []), newSched];
-        await onUpdateDay({ ...day, schedule: updatedSched });
+        await onUpdateDay({ ...day, schedule: updatedSched }, day);
         setFeedback(`Added block: "${newSched.title}" to today's schedule!`);
       } else {
         // Fallback note in reflection
         const currentNotes = day.notes ? `${day.notes}\n• ${query}` : `• ${query}`;
-        await onUpdateDay({ ...day, notes: currentNotes });
+        await onUpdateDay({ ...day, notes: currentNotes }, day);
         setFeedback(`Saved into today's journal!`);
       }
 
       setQuery('');
       setTimeout(() => setFeedback(null), 4000);
     } catch (err) {
-      console.error('Quick AI parse error:', err);
+      reportAiFailure('quick log parsing', err, console.error);
       setIsError(true);
       setFeedback('Could not save this log. Please try again.');
     } finally {
@@ -119,21 +144,65 @@ export const AiChatBubble: React.FC<AiChatBubbleProps> = ({
     setFeedback(null);
     setIsError(false);
     try {
-      const result = await customizeAppFromCommand(query, day);
-      const updatedDay = applyCustomizationToDay(day, result);
-      await onUpdateDay(updatedDay);
+      const currentConfiguration = getSystemConfiguration(settings.systemConfiguration);
+      const result = await customizeAppFromCommand(query, day, currentConfiguration);
+      setProposal({
+        result,
+        baseDay: structuredClone(day),
+        baseSettings: structuredClone({
+          defaultWorkoutMode: settings.defaultWorkoutMode,
+          dailySystem: settings.dailySystem,
+          systemConfiguration: currentConfiguration,
+        }),
+      });
+    } catch (error) {
+      reportAiFailure('customization proposal', error, console.error);
+      setIsError(true);
+      setFeedback('Gemini could not prepare a valid proposal. Your data was not changed. Try again or use the offline workflow.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleApplyProposal = async () => {
+    if (!proposal || isProcessing) return;
+    const currentConfiguration = getSystemConfiguration(settings.systemConfiguration);
+    const currentSettingsSnapshot = {
+      defaultWorkoutMode: settings.defaultWorkoutMode,
+      dailySystem: settings.dailySystem,
+      systemConfiguration: currentConfiguration,
+    };
+    if (
+      JSON.stringify(day) !== JSON.stringify(proposal.baseDay)
+      || JSON.stringify(currentSettingsSnapshot) !== JSON.stringify(proposal.baseSettings)
+    ) {
+      setProposal(null);
+      setIsError(true);
+      setFeedback('Your day or settings changed while this proposal was open. Generate a fresh proposal before applying changes.');
+      return;
+    }
+
+    setIsProcessing(true);
+    setFeedback(null);
+    setIsError(false);
+    try {
+      const updatedDay = applyCustomizationToDay(day, proposal.result);
+      await onUpdateDay(updatedDay, day);
       await onUpdateSettings({
         ...settings,
-        defaultWorkoutMode: result.dailySystem.workoutMode,
-        dailySystem: result.dailySystem,
+        defaultWorkoutMode: proposal.result.dailySystem.workoutMode,
+        dailySystem: proposal.result.dailySystem,
+        systemConfiguration: proposal.result.systemConfiguration,
       });
+      setProposal(null);
       setQuery('');
-      setFeedback(result.summary);
+      setFeedback(proposal.result.summary);
       window.setTimeout(() => setFeedback(null), 6000);
     } catch (error) {
-      console.error('AI customization failed:', error);
+      reportAiFailure('customization save', error, console.error);
+      setProposal(null);
       setIsError(true);
-      setFeedback(error instanceof Error ? error.message : 'Could not apply that command. Please try again.');
+      setFeedback('Could not finish saving the proposal. Review the current day and settings before trying again.');
     } finally {
       setIsProcessing(false);
     }
@@ -159,7 +228,7 @@ export const AiChatBubble: React.FC<AiChatBubbleProps> = ({
 
       {/* Expanded Modal / Drawer */}
       {isOpen && (
-        <div className="fixed bottom-20 md:bottom-8 right-6 z-50 w-[92vw] max-w-md p-4 rounded-2xl bg-[#131722]/95 border border-indigo-500/30 backdrop-blur-xl shadow-2xl shadow-indigo-950/40 animate-in fade-in slide-in-from-bottom-4 duration-200">
+        <div className="fixed bottom-20 md:bottom-8 right-6 z-50 w-[92vw] max-w-md max-h-[85vh] overflow-y-auto p-4 rounded-2xl bg-[#131722]/95 border border-indigo-500/30 backdrop-blur-xl shadow-2xl shadow-indigo-950/40 animate-in fade-in slide-in-from-bottom-4 duration-200">
           <div className="flex items-center justify-between pb-3 mb-3 border-b border-[#222a3d]">
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-indigo-400" />
@@ -183,7 +252,9 @@ export const AiChatBubble: React.FC<AiChatBubbleProps> = ({
             </button>
             <button
               type="button"
+              disabled={proposal !== null}
               onClick={() => { setMode('log'); setFeedback(null); }}
+              title={proposal ? 'Apply or discard the pending proposal first' : undefined}
               className={`flex items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] ${mode === 'log' ? 'bg-indigo-600/30 text-indigo-200' : 'text-zinc-400 hover:text-white'}`}
             >
               <Calendar className="w-3 h-3" /> Log activity
@@ -193,7 +264,7 @@ export const AiChatBubble: React.FC<AiChatBubbleProps> = ({
           {mode === 'customize' ? (
             <>
               <p className="text-[11px] text-zinc-300 mb-3 leading-relaxed">
-                Describe the changes you want to your schedule, habits, or workout. For example: “Move my workout to 6 PM and add a 30-minute reading block.”
+                Describe changes to your schedule, habits, workout, enabled modules, or dashboard order. For example: “Move my workout to 6 PM, add reading, and hide DSA Practice.”
               </p>
               {!keyConnected || showKeyForm ? (
                 <form onSubmit={saveApiKey} className="mb-3 p-2.5 rounded-lg bg-amber-950/20 border border-amber-500/20">
@@ -236,6 +307,7 @@ export const AiChatBubble: React.FC<AiChatBubbleProps> = ({
                 <textarea
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
+                  disabled={proposal !== null}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
@@ -250,12 +322,105 @@ export const AiChatBubble: React.FC<AiChatBubbleProps> = ({
                 />
                 <button
                   type="submit"
-                  disabled={isProcessing || !query.trim() || !keyConnected || showKeyForm}
+                  disabled={isProcessing || proposal !== null || !query.trim() || !keyConnected || showKeyForm}
                   className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-semibold flex items-center justify-center transition-colors"
                 >
                   {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 </button>
               </form>
+
+              <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
+                Gemini requests send your command and the current schedule, habits, workout details, and module layout to Google. Your saved API key stays in this browser; Google processes each request.
+              </p>
+
+              {proposal && (
+                <section aria-label="Review AI customization proposal" className="mt-3 p-3 rounded-xl bg-[#0a0c12] border border-indigo-500/30 space-y-3">
+                  <div>
+                    <h3 className="text-xs font-semibold text-white">Review proposed changes</h3>
+                    <p className="mt-1 text-[11px] text-zinc-300">{proposal.result.summary}</p>
+                  </div>
+                  <div className="space-y-2 text-[10px] text-zinc-300">
+                    <div>
+                      <h4 className="font-semibold text-indigo-200">Schedule ({proposal.result.dailySystem.schedule.length})</h4>
+                      <p className="mt-1 text-zinc-500">Current</p>
+                      <ul className="mt-1 max-h-24 overflow-y-auto space-y-0.5">
+                        {proposal.baseDay.schedule.map((item) => (
+                          <li key={item.id}>{item.time} · {item.title}</li>
+                        ))}
+                        {proposal.baseDay.schedule.length === 0 && <li>None</li>}
+                      </ul>
+                      <p className="mt-1 text-indigo-200">Proposed</p>
+                      <ul className="mt-1 max-h-24 overflow-y-auto space-y-0.5">
+                        {proposal.result.dailySystem.schedule.map((item) => (
+                          <li key={item.id}>{item.time} · {item.title}</li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div>
+                      <h4 className="font-semibold text-indigo-200">Habits ({proposal.result.dailySystem.habits.length})</h4>
+                      <p className="mt-1 text-zinc-500">Current: {proposal.baseDay.habits.map((habit) => habit.title).join(', ') || 'None'}</p>
+                      <p className="text-indigo-200">Proposed: {proposal.result.dailySystem.habits.map((habit) => habit.title).join(', ') || 'None'}</p>
+                    </div>
+                    <div>
+                      <h4 className="font-semibold text-indigo-200">Commitments</h4>
+                      <p className="mt-1 text-zinc-500">Current: {proposal.baseDay.workout.dailyNonNegotiables.map((item) => item.name).join(', ') || 'None'}</p>
+                      <p className="text-indigo-200">Proposed: {proposal.result.dailySystem.nonNegotiables.map((item) => item.name).join(', ') || 'None'}</p>
+                    </div>
+                    <div>
+                      <h4 className="font-semibold text-indigo-200">Workout</h4>
+                      <p className="mt-1 text-zinc-500">
+                        Current: {proposal.baseDay.workout.mode} · {proposal.baseDay.workout.cycleDay} · {proposal.baseDay.workout.exercises.map((exercise) => exercise.name).join(', ') || 'No exercises'}
+                      </p>
+                      <p className="mt-1">{proposal.result.dailySystem.workoutMode} · {proposal.result.dailySystem.workoutCycle}</p>
+                      <p className="text-indigo-200">Proposed: {proposal.result.dailySystem.workoutExercises.map((exercise) => `${exercise.name} (${exercise.sets} sets)`).join(', ') || 'No exercises'}</p>
+                    </div>
+                    <div>
+                      <h4 className="font-semibold text-indigo-200">Application configuration</h4>
+                      <p className="mt-1 text-zinc-500">
+                        Current modules: {proposal.baseSettings.systemConfiguration.enabledModules
+                          .map((id) => SYSTEM_MODULE_REGISTRY.find((item) => item.id === id)?.label || id)
+                          .join(', ') || 'None'}
+                      </p>
+                      <p className="mt-1">
+                        Proposed modules: {proposal.result.systemConfiguration.enabledModules
+                          .map((id) => SYSTEM_MODULE_REGISTRY.find((item) => item.id === id)?.label || id)
+                          .join(', ') || 'None'}
+                      </p>
+                      <p className="text-zinc-500">
+                        Current dashboard: {proposal.baseSettings.systemConfiguration.dashboardLayout
+                          .map((id) => DASHBOARD_WIDGET_REGISTRY.find((item) => item.id === id)?.label || id)
+                          .join(' → ') || 'No widgets'}
+                      </p>
+                      <p>
+                        Proposed dashboard: {proposal.result.systemConfiguration.dashboardLayout
+                          .map((id) => DASHBOARD_WIDGET_REGISTRY.find((item) => item.id === id)?.label || id)
+                          .join(' → ') || 'No widgets'}
+                      </p>
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-zinc-400">
+                    Hidden modules do not delete their records. Existing trackers, goals, and AI preferences are preserved.
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={isProcessing}
+                      onClick={() => void handleApplyProposal()}
+                      className="flex-1 px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold"
+                    >
+                      {isProcessing ? 'Saving…' : 'Apply changes'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isProcessing}
+                      onClick={() => { setProposal(null); setFeedback('Proposal discarded. No changes were applied.'); setIsError(false); }}
+                      className="px-3 py-2 rounded-lg bg-[#202534] hover:bg-[#2b3245] disabled:opacity-50 text-zinc-200 text-xs"
+                    >
+                      Discard
+                    </button>
+                  </div>
+                </section>
+              )}
             </>
           ) : (
             <>
@@ -267,6 +432,7 @@ export const AiChatBubble: React.FC<AiChatBubbleProps> = ({
                   type="text"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
+                  maxLength={1000}
                   placeholder="What did you just accomplish?..."
                   className="flex-1 px-3.5 py-2.5 bg-[#0a0c12] border border-[#232a3d] rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
                   autoFocus
@@ -279,6 +445,9 @@ export const AiChatBubble: React.FC<AiChatBubbleProps> = ({
                   {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 </button>
               </form>
+              <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
+                When Gemini is connected, this log text is sent to Google for parsing. Without a key, the local parser handles it in your browser.
+              </p>
             </>
           )}
 

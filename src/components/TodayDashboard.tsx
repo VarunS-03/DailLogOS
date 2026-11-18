@@ -12,7 +12,7 @@ import {
   ChevronRight,
   Plus,
 } from 'lucide-react';
-import { DayRecord, ScheduleItem, TabType } from '../types';
+import { DashboardWidgetId, DayRecord, ScheduleItem, TabType, UserSystemConfiguration } from '../types';
 import { AiInsightCard } from './AiInsightCard';
 import { ProgressRing } from './ProgressRing';
 import { TimelineSchedule } from './TimelineSchedule';
@@ -23,9 +23,11 @@ import confetti from 'canvas-confetti';
 interface TodayDashboardProps {
   day: DayRecord;
   yesterday?: DayRecord | null;
-  onUpdateDay: (updatedDay: DayRecord) => Promise<void>;
+  onUpdateDay: (updatedDay: DayRecord, baseDay?: DayRecord) => Promise<void>;
   onDateChange: (dateStr: string) => void;
   onNavigateTab: (tab: TabType) => void;
+  configuration: UserSystemConfiguration;
+  aiEnabled: boolean;
 }
 
 export const TodayDashboard: React.FC<TodayDashboardProps> = ({
@@ -34,6 +36,8 @@ export const TodayDashboard: React.FC<TodayDashboardProps> = ({
   onUpdateDay,
   onDateChange,
   onNavigateTab,
+  configuration,
+  aiEnabled,
 }) => {
   const [briefing, setBriefing] = useState<AiBriefing | null>(null);
   const [briefingLoading, setBriefingLoading] = useState(false);
@@ -56,6 +60,7 @@ export const TodayDashboard: React.FC<TodayDashboardProps> = ({
 
   // Fetch AI briefing
   const loadBriefing = async () => {
+    if (!aiEnabled) return;
     setBriefingLoading(true);
     try {
       const b = await generateDailyBriefing(day, yesterday);
@@ -68,8 +73,13 @@ export const TodayDashboard: React.FC<TodayDashboardProps> = ({
   };
 
   useEffect(() => {
+    if (!aiEnabled) {
+      setBriefing(null);
+      setBriefingLoading(false);
+      return;
+    }
     loadBriefing();
-  }, [day.date]);
+  }, [day.date, aiEnabled]);
 
   // Pomodoro timer effect
   useEffect(() => {
@@ -97,29 +107,29 @@ export const TodayDashboard: React.FC<TodayDashboardProps> = ({
         ...day.workout,
         dailyNonNegotiables: updatedNns,
       },
-    });
+    }, day);
   };
 
   // Habit toggle
   const toggleHabit = async (id: string) => {
     const habits = day.habits || [];
     const updated = habits.map((h) => (h.id === id ? { ...h, completed: !h.completed } : h));
-    await onUpdateDay({ ...day, habits: updated });
+    await onUpdateDay({ ...day, habits: updated }, day);
   };
 
   // Schedule toggle
   const toggleSchedule = async (id: string, status: 'completed' | 'skipped' | 'pending') => {
     const sched = day.schedule || [];
     const updated = sched.map((s) => (s.id === id ? { ...s, status } : s));
-    await onUpdateDay({ ...day, schedule: updated });
+    await onUpdateDay({ ...day, schedule: updated }, day);
   };
 
   const addScheduleBlock = async (block: ScheduleItem) => {
-    await onUpdateDay({ ...day, schedule: [...(day.schedule || []), block] });
+    await onUpdateDay({ ...day, schedule: [...(day.schedule || []), block] }, day);
   };
 
   const deleteScheduleBlock = async (id: string) => {
-    await onUpdateDay({ ...day, schedule: (day.schedule || []).filter((item) => item.id !== id) });
+    await onUpdateDay({ ...day, schedule: (day.schedule || []).filter((item) => item.id !== id) }, day);
   };
 
   const handleStartFocus = (block: ScheduleItem) => {
@@ -131,6 +141,16 @@ export const TodayDashboard: React.FC<TodayDashboardProps> = ({
     const m = Math.floor(secs / 60);
     const s = secs % 60;
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const widgetOrder = (widget: DashboardWidgetId) => configuration.dashboardLayout.indexOf(widget);
+  const updateTrackerValue = async (trackerId: string, value: number) => {
+    if (!Number.isFinite(value) || value < 0 || value > 100000) return;
+    const values = (day.customTrackerValues || []).filter((item) => item.trackerId !== trackerId);
+    await onUpdateDay({
+      ...day,
+      customTrackerValues: [...values, { trackerId, value }],
+    }, day);
   };
 
   const todayStr = getLocalDateId();
@@ -209,15 +229,18 @@ export const TodayDashboard: React.FC<TodayDashboardProps> = ({
         </div>
       )}
 
-      {/* 2. AI Morning Briefing Card */}
-      <AiInsightCard
-        briefing={briefing}
-        loading={briefingLoading}
-        onRefresh={loadBriefing}
-      />
+      <div className="flex flex-col gap-6">
+      {/* Dashboard widgets follow the user's configured order. */}
+      {configuration.dashboardLayout.includes('briefing') && aiEnabled && (
+        <div style={{ order: widgetOrder('briefing') }}>
+          <AiInsightCard briefing={briefing} loading={briefingLoading} onRefresh={loadBriefing} />
+        </div>
+      )}
 
-      {/* 3. Non-Negotiables & Micro-Habits (1-Tap Psychological Ease) */}
-      <div className="p-5 rounded-2xl bg-[#131722] border border-[#20283c] space-y-4">
+      {configuration.dashboardLayout.includes('commitments') && <div
+        style={{ order: widgetOrder('commitments') }}
+        className="p-5 rounded-2xl bg-[#131722] border border-[#20283c] space-y-4"
+      >
         <div className="flex items-center justify-between pb-3 border-b border-[#20283c]">
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-emerald-400" />
@@ -280,62 +303,131 @@ export const TodayDashboard: React.FC<TodayDashboardProps> = ({
             ))}
           </div>
         </div>
+      </div>}
+
+      {configuration.dashboardLayout.includes('schedule') && <div style={{ order: widgetOrder('schedule') }}>
+        <TimelineSchedule
+          schedule={day.schedule || []}
+          onToggleStatus={toggleSchedule}
+          onAddBlock={addScheduleBlock}
+          onDeleteBlock={deleteScheduleBlock}
+          onStartFocus={handleStartFocus}
+        />
+      </div>}
+
+      {configuration.dashboardLayout.includes('goals') && (
+        <section style={{ order: widgetOrder('goals') }} className="p-5 rounded-2xl bg-[#131722] border border-[#20283c]">
+          <h3 className="text-sm font-semibold text-white mb-2">Goals</h3>
+          {configuration.goals.primary && <p className="text-xs text-indigo-300">Primary: {configuration.goals.primary}</p>}
+          {configuration.goals.secondary.length > 0 && (
+            <ul className="mt-2 space-y-1 text-xs text-zinc-400">
+              {configuration.goals.secondary.map((goal, index) => <li key={`${index}-${goal}`}>• {goal}</li>)}
+            </ul>
+          )}
+          {!configuration.goals.primary && configuration.goals.secondary.length === 0 && (
+            <p className="text-xs text-zinc-500">Add a primary or supporting goal in Settings.</p>
+          )}
+        </section>
+      )}
+
+      {configuration.dashboardLayout.includes('custom_trackers') && configuration.customTrackers.length > 0 && (
+        <section style={{ order: widgetOrder('custom_trackers') }} className="p-5 rounded-2xl bg-[#131722] border border-[#20283c] space-y-3">
+          <h3 className="text-sm font-semibold text-white">Custom trackers</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {configuration.customTrackers.map((tracker) => {
+              const savedValue = day.customTrackerValues?.find((item) => item.trackerId === tracker.id)?.value;
+              return (
+                <label key={tracker.id} className="flex items-center gap-3 text-xs text-zinc-300">
+                  <span className="flex-1">{tracker.name}{tracker.unit ? ` (${tracker.unit})` : ''}</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100000"
+                    step="any"
+                    value={savedValue ?? ''}
+                    onChange={(event) => {
+                      if (event.target.value === '') {
+                        void onUpdateDay({
+                          ...day,
+                          customTrackerValues: (day.customTrackerValues || []).filter((item) => item.trackerId !== tracker.id),
+                        }, day);
+                      } else {
+                        void updateTrackerValue(tracker.id, Number(event.target.value));
+                      }
+                    }}
+                    className="w-24 px-2 py-1.5 rounded-lg bg-[#0e1118] border border-[#1f2433] text-right text-zinc-200"
+                  />
+                  {tracker.dailyTarget !== undefined && <span className="text-zinc-500">/ {tracker.dailyTarget}</span>}
+                </label>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {configuration.dashboardLayout.includes('workspaces') && (
+      <div style={{ order: widgetOrder('workspaces') }} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {configuration.enabledModules.includes('academics') && (
+          <div
+            onClick={() => onNavigateTab('academics')}
+            className="p-5 rounded-2xl bg-[#131722] border border-[#20283c] hover:border-indigo-500/40 transition-all cursor-pointer group flex flex-col justify-between"
+          >
+            <div>
+              <span className="text-[10px] font-mono font-semibold uppercase text-indigo-400 tracking-wider">
+                Work & Academics
+              </span>
+              <h4 className="text-sm font-semibold text-white mt-1 group-hover:text-indigo-300 transition-colors">
+                {day.academics?.subject || 'Academics Session'}
+              </h4>
+              <p className="text-xs text-zinc-400 mt-1 line-clamp-2">
+                {day.academics?.objective || 'Active retrieval, formulas, and deep study notes.'}
+              </p>
+            </div>
+            <div className="flex items-center gap-1 text-xs text-indigo-400 font-medium mt-4">
+              <span>Open Study Workspace</span>
+              <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
+            </div>
+          </div>
+        )}
+
+        {configuration.enabledModules.includes('dsa') && (
+          <div
+            onClick={() => onNavigateTab('dsa')}
+            className="p-5 rounded-2xl bg-[#131722] border border-[#20283c] hover:border-emerald-500/40 transition-all cursor-pointer group flex flex-col justify-between"
+          >
+            <div>
+              <span className="text-[10px] font-mono font-semibold uppercase text-emerald-400 tracking-wider">
+                Algorithms
+              </span>
+              <h4 className="text-sm font-semibold text-white mt-1 group-hover:text-emerald-300 transition-colors">
+                DSA Practice ({day.dsa?.length || 0} Solved)
+              </h4>
+              <p className="text-xs text-zinc-400 mt-1 line-clamp-2">
+                {day.dsa?.[0]?.problem ? `Latest: ${day.dsa[0].problem} (${day.dsa[0].pattern})` : 'Record patterns with AI assistance.'}
+              </p>
+            </div>
+            <div className="flex items-center gap-1 text-xs text-emerald-400 font-medium mt-4">
+              <span>Open DSA Workspace</span>
+              <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
+            </div>
+          </div>
+        )}
+
+        {configuration.enabledModules.includes('workout') && (
+          <button type="button" onClick={() => onNavigateTab('workout')} className="p-5 rounded-2xl bg-[#131722] border border-[#20283c] text-left hover:border-orange-500/40 transition-all cursor-pointer">
+            <span className="text-[10px] font-mono font-semibold uppercase text-orange-400 tracking-wider">Workout</span>
+            <span className="block text-sm font-semibold text-white mt-1">Open workout workspace</span>
+          </button>
+        )}
+
+        {configuration.enabledModules.includes('projects') && (
+          <button type="button" onClick={() => onNavigateTab('projects')} className="p-5 rounded-2xl bg-[#131722] border border-[#20283c] text-left hover:border-sky-500/40 transition-all cursor-pointer">
+            <span className="text-[10px] font-mono font-semibold uppercase text-sky-400 tracking-wider">Projects</span>
+            <span className="block text-sm font-semibold text-white mt-1">Open project workspace</span>
+          </button>
+        )}
       </div>
-
-      {/* 4. Schedule & Timeline with Visual Progression */}
-      <TimelineSchedule
-        schedule={day.schedule || []}
-        onToggleStatus={toggleSchedule}
-        onAddBlock={addScheduleBlock}
-        onDeleteBlock={deleteScheduleBlock}
-        onStartFocus={handleStartFocus}
-      />
-
-      {/* 5. Direct Quick Workspace Hub */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {/* Academics */}
-        <div
-          onClick={() => onNavigateTab('academics')}
-          className="p-5 rounded-2xl bg-[#131722] border border-[#20283c] hover:border-indigo-500/40 transition-all cursor-pointer group flex flex-col justify-between"
-        >
-          <div>
-            <span className="text-[10px] font-mono font-semibold uppercase text-indigo-400 tracking-wider">
-              Work & Academics
-            </span>
-            <h4 className="text-sm font-semibold text-white mt-1 group-hover:text-indigo-300 transition-colors">
-              {day.academics?.subject || 'Academics Session'}
-            </h4>
-            <p className="text-xs text-zinc-400 mt-1 line-clamp-2">
-              {day.academics?.objective || 'Active retrieval, formulas, and deep study notes.'}
-            </p>
-          </div>
-          <div className="flex items-center gap-1 text-xs text-indigo-400 font-medium mt-4">
-            <span>Open Study Workspace</span>
-            <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
-          </div>
-        </div>
-
-        {/* DSA */}
-        <div
-          onClick={() => onNavigateTab('dsa')}
-          className="p-5 rounded-2xl bg-[#131722] border border-[#20283c] hover:border-emerald-500/40 transition-all cursor-pointer group flex flex-col justify-between"
-        >
-          <div>
-            <span className="text-[10px] font-mono font-semibold uppercase text-emerald-400 tracking-wider">
-              Algorithms
-            </span>
-            <h4 className="text-sm font-semibold text-white mt-1 group-hover:text-emerald-300 transition-colors">
-              DSA Practice ({day.dsa?.length || 0} Solved)
-            </h4>
-            <p className="text-xs text-zinc-400 mt-1 line-clamp-2">
-              {day.dsa?.[0]?.problem ? `Latest: ${day.dsa[0].problem} (${day.dsa[0].pattern})` : 'Record patterns with AI assistance.'}
-            </p>
-          </div>
-          <div className="flex items-center gap-1 text-xs text-emerald-400 font-medium mt-4">
-            <span>Open DSA Workspace</span>
-            <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
-          </div>
-        </div>
+    )}
       </div>
     </div>
   );

@@ -35,28 +35,21 @@ We assume a zero-trust model where an attacker can:
 - **Client-Side Form Constraints**:
   - Every input field, textarea, and select element across all views (`AcademicsView`, `DsaView`, `WorkoutView`, `ScheduleView`, `DailyReviewView`, `TodayDashboard`, `ProjectsView`) enforces physical `maxLength` attributes (ranging from 50 to 10,000 characters).
 
-### C. Safe Backup / JSON Import & Export
-- **Multi-Phase Sanitization Pipeline**:
-  - File size hard limit enforced at `< 5MB`.
-  - Structural shape inspection checking for required schema properties before ingestion.
-  - Strict type coercion and numeric clamping (e.g. 1–5 ratings, valid date strings matching `YYYY-MM-DD`).
-  - XSS neutralizer that strips dangerous scripts, event handlers, and data URIs.
-  - Array bounding limiting day imports to a safe maximum (365 records max).
-- **User Ownership Scoping**:
-  - Imported records are immediately re-keyed to the active user's `uid` and isolated in storage, preventing cross-tenant injection.
+### C. Backup / JSON Import & Export
+- Backups are plaintext JSON. They contain day history and user settings (including a custom wallpaper if present); they do not contain raw onboarding answers or Gemini credentials. Treat exported files as sensitive.
+- Import enforces a 5 MiB file limit, supported schema version, at most 1,000 days, real calendar-date keys, allowed object fields, bounded values, and validated custom tracker and behavioral data before application.
+- Imported text remains data rendered by React; the importer does not claim to remove all HTML or event-handler syntax. It does not import user IDs or credentials.
+- Merge retains records absent from the backup and applies matching records by timestamp (backup wins ties). Guest Replace replaces guest day history. Replace for authenticated cloud history is disabled because stale operations on other devices cannot be safely coordinated.
+- Settings are imported separately from day history. If settings persistence fails after days are applied, the UI reports that partial result and keeps the import available for retry.
 
 ### D. Device Sharing & Local Storage Privacy
-- **User-Prefixed Keys**:
-  - All local cache entries are strictly isolated using `daily_os_day_${uid}_${date}` and `daily_os_settings_${uid}`.
-- **Clean Sign-Out Purge**:
-  - Triggering Sign-Out automatically wipes all keys associated with that `uid` from `localStorage`, preventing residual information from persisting on shared machines.
-- **Complete Account & Data Deletion**:
-  - A permanent "Delete Account & Data" action purges all Firestore documents and local caches, followed by immediate Firebase Auth termination.
-
+- Day and settings cache keys are scoped by user ID. Sign-out removes the current user's day and settings cache keys. Guest data and the separately stored Gemini key are not user-scoped and remain in the browser.
+- Account deletion writes an immutable Firestore tombstone, blocks further writes, removes account documents and local UID-scoped data, then deletes the Firebase Authentication user. The tombstone remains to reject stale clients. If cleanup is interrupted, deletion stays blocked and can be retried.
 ### E. App Check & Client Integrity
-- **Firebase App Check**:
-  - Initialized with `ReCaptchaV3Provider` / `ReCaptchaEnterpriseProvider` to prevent unauthorized automated scraping or direct API invocation from non-applet domains.
-  - Development debug tokens are strictly isolated to non-production environments.
+- **Optional Firebase App Check client initialization**:
+  - The client initializes `ReCaptchaV3Provider` only when `VITE_FIREBASE_RECAPTCHA_SITE_KEY` is configured. Initialization failures are logged without exposing the key.
+  - A development debug token is enabled only in Vite development mode.
+  - Client initialization does not enforce App Check by itself. Configure and verify enforcement for the relevant Firebase services in the Firebase console before production deployment; this repository has not validated a live project's enforcement settings.
 
 ### F. Privacy-Preserving Error Handling
 - **Sanitized Error Messaging**:
@@ -66,7 +59,8 @@ We assume a zero-trust model where an attacker can:
 ---
 
 ## 3. Security Maintenance & Incident Response
-- **Secret Management**:
-  - No secrets or API keys are committed into the repository or client bundles. All environment secrets are declared in `.env.example` and injected via secure environment variables.
+- **Client-visible keys**:
+  - Firebase web configuration and Gemini API keys are client-visible values, not server-side secrets. A `VITE_GEMINI_API_KEY` is embedded in the built client; a key entered in the UI is stored in browser local storage and used for direct browser-to-Gemini requests. Do not commit real keys; apply provider-side restrictions and quotas, or route production AI requests through a trusted server if keys must remain secret.
+  - `.env.example` contains placeholders only. Keep real local environment files out of version control and verify their ignore status before publishing.
 - **Dependency Auditing**:
-  - Dependencies are continuously monitored using automated dependency checks.
+  - Run the package manager's dependency audit as part of release preparation; automated monitoring is not guaranteed by this repository configuration.

@@ -13,6 +13,7 @@ import {
 } from '../types';
 import { CURRENT_DAY_SCHEMA_VERSION } from '../types';
 import { getPrescribedSetCount } from '../utils/workout';
+import { createDefaultSystemConfiguration } from '../services/systemConfiguration';
 
 export const DAYS_OF_WEEK = [
   'Sunday',
@@ -146,6 +147,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
   },
   theme: 'dark',
   notificationsEnabled: false,
+  systemConfiguration: createDefaultSystemConfiguration(),
   customWallpaper: '',
   wallpaperBlur: 6,
   wallpaperDim: 40,
