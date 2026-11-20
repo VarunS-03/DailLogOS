@@ -76,16 +76,18 @@ The latest local code logs a sanitized `phase`, allowlisted category, and safe F
 
 The default local deployment target is therefore consistent with the production Hosting hostname. A CLI `--project` override or external pipeline configuration can override that default; this checkout contains no deploy script that does so.
 
-## Smallest safe next action
+## Release and verification
 
-After separate deployment authorization, deploy the current `firestore.rules` to the intended `dailylogos` project first, then deploy the built Hosting app from commit `fd1fd30` to the same project. The rules change is owner-scoped and does not weaken cross-user isolation. Verify the served HTML references the new local build's entry asset and that a new and returning Google account reach readiness. If permission denial remains, inspect the sanitized phase/category from the new client; `account_days_list` would confirm the collection rule path, while other phase names direct investigation to the corresponding rule.
+On 2026-11-20, commit `80beee4` was pushed to `origin/main`. The Firestore rules and Hosting were deployed with the explicit target `dailylogos`; Firebase CLI reported successful rule compilation/release and Hosting live release. The published `firestore.rules` includes the owner-scoped day collection list permission already described above.
 
-Because the public HTML is cacheable for one hour, confirm in a fresh browser session or after the cache window that the new asset is loaded. Do not loosen other rules or modify account data to address this symptom.
+A fresh public GET of `https://dailylogos.web.app/` returned the new entry asset `/assets/index-q29VVquP.js`, matching the local production build. Fetching that asset confirmed it contains `account_days_list` and the permission-specific restore message, and does not contain the prior generic access-denied banner. This verifies the new client is publicly served. It does not verify that a signed-in account can restore successfully.
+
+The smallest remaining action is to retry sign-in/restore in the user's browser after refreshing the page. If it still fails, capture only the sanitized phase/category/code from the new client. `account_days_list` would point to the collection query; the other per-read phases point to their corresponding operations. No live account data was read or changed as part of this release.
 
 ## Remaining uncertainty
 
-- The production Firestore rules were not read and their exact current contents are unknown.
+- The production Firestore rules were not read back after deployment; successful deployment of the local rules file was confirmed from the CLI, but a subsequent server-side rules inspection was not performed.
 - The public app's Firebase Auth/Firestore runtime project ID was not extracted from the bundle; a project ID string appearing in a minified bundle is not reliable proof of the configured SDK instance.
-- A public Hosting request may be served from an HTTP cache. The current observed response is old, but this alone does not reveal deployment timestamps or origin cache state.
+- The public Hosting HTML and bundle were fetched immediately after release and matched the new build. A previously open tab may continue to use cached HTML until refreshed.
 - The screenshot does not expose a Firebase error code or request path, so it cannot prove which operation failed.
-- App Check enforcement and production Authorized Domains were not inspected. Google sign-in appearing successful makes Auth domain failure less likely, but does not establish Firestore access.
+- End-to-end account restore was not tested with a live Google account. App Check enforcement and production Authorized Domains were not inspected. The screenshot and live behavior after release therefore remain unverified.
