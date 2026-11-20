@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { initializeTestEnvironment, RulesTestEnvironment } from '@firebase/rules-unit-testing';
-import { deleteDoc, doc, Firestore, getDoc, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
+import { collection, deleteDoc, doc, Firestore, getDoc, getDocs, limit, query, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 import { DEFAULT_SETTINGS, createDefaultDayRecord } from '../src/constants/templates';
 import { initializeUserAccountForDatabase, AccountDeletionError, AccountRestoreError } from '../src/firebase';
 import {
@@ -68,6 +68,14 @@ async function main() {
     assert.equal((await getDoc(doc(freshDatabase, 'users', freshUid))).exists(), true);
     assert.equal((await getDoc(doc(freshDatabase, 'users', freshUid, 'settings', 'main'))).exists(), false);
     assert.equal((await getDoc(doc(freshDatabase, 'users', freshUid, 'days', '2026-10-11'))).exists(), false);
+    assert.equal((await getDocs(query(collection(freshDatabase, 'users', freshUid, 'days'), limit(1)))).empty, true);
+    await assert.rejects(
+      getDocs(query(collection(typedFirestore(environment, 'different-owner'), 'users', freshUid, 'days'), limit(1))),
+    );
+    await assert.rejects(
+      getDocs(query(collection(environment.unauthenticatedContext().firestore(), 'users', freshUid, 'days'), limit(1))),
+    );
+    await assert.rejects(getDoc(doc(freshDatabase, 'users', freshUid, 'days', 'invalid-date')));
 
     await updateDoc(doc(freshDatabase, 'users', freshUid, 'onboarding', 'main'), {
       status: 'in_progress', currentStage: 3, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
@@ -93,7 +101,9 @@ async function main() {
     await assert.rejects(getDoc(doc(typedFirestore(environment, 'not-owner'), 'users', freshUid)));
     await assert.rejects(
       initializeUserAccountForDatabase(freshUser, typedFirestore(environment, 'different-owner')),
-      (error: unknown) => error instanceof AccountRestoreError && error.phase === 'account_reads' && error.category === 'permission-denied',
+      (error: unknown) => error instanceof AccountRestoreError
+        && ['account_profile_read', 'account_tombstone_read', 'account_settings_read', 'account_days_list'].includes(error.phase)
+        && error.category === 'permission-denied',
     );
     const malformedUid = 'malformed-account';
     const malformedDatabase = typedFirestore(environment, malformedUid);

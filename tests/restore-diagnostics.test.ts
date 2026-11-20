@@ -12,10 +12,10 @@ const warnings: unknown[][] = [];
 const previousWarn = console.warn;
 console.warn = (...args: unknown[]) => { warnings.push(args); };
 try {
-  logRestoreFailure('account_reads', new Error('credential=DO_NOT_LOG_THIS'));
+  logRestoreFailure('account_days_list', new Error('credential=DO_NOT_LOG_THIS'));
 } finally {
   console.warn = previousWarn;
 }
 assert.equal(JSON.stringify(warnings).includes('DO_NOT_LOG_THIS'), false);
-assert.equal(JSON.stringify(warnings).includes('account_reads'), true);
+assert.equal(JSON.stringify(warnings).includes('account_days_list'), true);
 console.log('Restore diagnostic classification tests passed.');

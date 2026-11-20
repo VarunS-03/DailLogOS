@@ -144,7 +144,7 @@ export class AccountDeletionError extends Error {
   }
 }
 
-export type RestorePhase = 'auth_state' | 'account_reads' | 'onboarding_transaction' | 'profile_write' | 'history_cloud' | 'outbox_open' | 'outbox_read' | 'account_integrity';
+export type RestorePhase = 'auth_state' | 'account_reads' | 'account_profile_read' | 'account_tombstone_read' | 'account_settings_read' | 'account_days_list' | 'onboarding_transaction' | 'profile_write' | 'history_cloud' | 'outbox_open' | 'outbox_read' | 'account_integrity';
 export type RestoreErrorCategory = 'permission-denied' | 'unauthenticated' | 'unavailable' | 'failed-precondition' | 'storage-unavailable' | 'data-invalid' | 'deletion-pending' | 'unknown';
 
 export class AccountRestoreError extends Error {
@@ -193,6 +193,19 @@ export function logRestoreFailure(phase: RestorePhase, error: unknown): void {
   } catch {
     // Diagnostics must never prevent restoration or error handling.
   }
+}
+
+function labelRestoreRead<T>(phase: Extract<RestorePhase, `account_${string}_read` | 'account_days_list'>, operation: Promise<T>): Promise<T> {
+  return operation.catch((error: unknown) => {
+    const category = classifyRestoreError(error);
+    logRestoreFailure(phase, error);
+    const message = category === 'permission-denied'
+      ? 'Cloud access was denied while checking this account.'
+      : category === 'unavailable'
+        ? 'Cloud account data is temporarily unavailable. Check your connection and retry.'
+        : 'Account data could not be checked. Retry to continue.';
+    throw new AccountRestoreError(phase, category, message, error);
+  });
 }
 
 /**
@@ -674,12 +687,13 @@ export async function initializeUserAccountForDatabase(
   let existingDays;
   try {
     [profileSnapshot, deletionTombstoneSnapshot, settingsSnapshot, existingDays] = await Promise.all([
-      getDocFromServer(profileRef),
-      getDocFromServer(deletionTombstoneRef),
-      getDoc(settingsRef),
-      getDocs(daysQuery),
+      labelRestoreRead('account_profile_read', getDocFromServer(profileRef)),
+      labelRestoreRead('account_tombstone_read', getDocFromServer(deletionTombstoneRef)),
+      labelRestoreRead('account_settings_read', getDoc(settingsRef)),
+      labelRestoreRead('account_days_list', getDocs(daysQuery)),
     ]);
   } catch (err) {
+    if (err instanceof AccountRestoreError) throw err;
     const category = classifyRestoreError(err);
     logRestoreFailure('account_reads', err);
     throw new AccountRestoreError('account_reads', category, category === 'permission-denied'
