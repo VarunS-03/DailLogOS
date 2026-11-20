@@ -314,7 +314,7 @@ export type TabType =
   | 'history'
   | 'settings';
 
-export type SyncStatus = 'idle' | 'pending' | 'syncing' | 'offline' | 'conflict' | 'synced' | 'error';
+export type SyncStatus = 'idle' | 'pending' | 'syncing' | 'offline' | 'conflict' | 'synced' | 'error' | 'unavailable';
 
 export type OnboardingStatus = 'not_started' | 'in_progress' | 'completed';
 

@@ -103,6 +103,17 @@ let appCheckInstance: AppCheck | null = null;
 let appCheckInitialization: Promise<void> = Promise.resolve();
 let isConfigured = false;
 const GUEST_DAY_COLLECTION_KEY = 'daily_os_guest_days_v1';
+interface RuntimeViteEnv {
+  DEV?: boolean;
+  VITE_FIREBASE_API_KEY?: string;
+  VITE_FIREBASE_PROJECT_ID?: string;
+  VITE_FIREBASE_AUTH_DOMAIN?: string;
+  VITE_FIREBASE_STORAGE_BUCKET?: string;
+  VITE_FIREBASE_MESSAGING_SENDER_ID?: string;
+  VITE_FIREBASE_APP_ID?: string;
+  VITE_FIREBASE_RECAPTCHA_ENTERPRISE_SITE_KEY?: string;
+}
+const viteEnv: RuntimeViteEnv = (import.meta as unknown as { env?: RuntimeViteEnv }).env ?? {};
 
 export class AppAuthError extends Error implements AuthErrorInfo {
   code: string;
@@ -133,23 +144,75 @@ export class AccountDeletionError extends Error {
   }
 }
 
+export type RestorePhase = 'auth_state' | 'account_reads' | 'onboarding_transaction' | 'profile_write' | 'history_cloud' | 'outbox_open' | 'outbox_read' | 'account_integrity';
+export type RestoreErrorCategory = 'permission-denied' | 'unauthenticated' | 'unavailable' | 'failed-precondition' | 'storage-unavailable' | 'data-invalid' | 'deletion-pending' | 'unknown';
+
+export class AccountRestoreError extends Error {
+  readonly phase: RestorePhase;
+  readonly category: RestoreErrorCategory;
+  readonly cause: unknown;
+
+  constructor(phase: RestorePhase, category: RestoreErrorCategory, message: string, cause?: unknown) {
+    super(message);
+    this.name = 'AccountRestoreError';
+    this.phase = phase;
+    this.category = category;
+    this.cause = cause;
+  }
+}
+
+function safeErrorCode(error: unknown): string {
+  if (!error || typeof error !== 'object' || !('code' in error)) return '';
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? code.split('/').pop()?.toLowerCase() ?? '' : '';
+}
+
+export function classifyRestoreError(error: unknown): RestoreErrorCategory {
+  if (error instanceof AccountRestoreError) return error.category;
+  if (error instanceof AccountDeletionError) return 'deletion-pending';
+  const code = safeErrorCode(error);
+  if (code === 'permission-denied') return 'permission-denied';
+  if (code === 'unauthenticated') return 'unauthenticated';
+  if (code === 'unavailable' || code === 'deadline-exceeded' || code === 'network-request-failed') return 'unavailable';
+  if (code === 'failed-precondition') return 'failed-precondition';
+  if (code === 'invalid-argument' || code === 'data-loss') return 'data-invalid';
+  if (error instanceof Error && /saved .* invalid|invalid .* (configuration|settings|profile|onboarding)/i.test(error.message)) return 'data-invalid';
+  if (error instanceof Error && /indexeddb|outbox|storage/i.test(error.message)) return 'storage-unavailable';
+  return 'unknown';
+}
+
+export function logRestoreFailure(phase: RestorePhase, error: unknown): void {
+  try {
+    const category = classifyRestoreError(error);
+    const code = safeErrorCode(error);
+    console.warn('[DAILY OS] Account restore step failed.', {
+      phase,
+      category,
+      ...(code ? { code } : {}),
+    });
+  } catch {
+    // Diagnostics must never prevent restoration or error handling.
+  }
+}
+
 /**
  * Sanitized, privacy-preserving error handler.
  * Prevents disclosure of user reflection data, internal document paths, or tokens in logs.
  */
 export function handleFirestoreError(operation: string, error: unknown): Error {
-  const message = error instanceof Error ? error.message : 'Unknown error';
-  // Categorize known error patterns safely
-  if (message.includes('permission-denied') || message.includes('Missing or insufficient permissions')) {
-    console.warn(`[DAILY OS] Access denied during ${operation}. Authorization invariant enforced.`);
-    return new Error('Access denied: You do not have permission to perform this action.');
-  }
-  if (message.includes('unavailable') || message.includes('network')) {
-    console.warn(`[DAILY OS] Network error during ${operation}.`);
-    return new Error('Network connection issue. Please check your internet connection.');
-  }
-  console.warn(`[DAILY OS] Database operation error during ${operation}.`);
-  return new Error('Unable to complete the operation. Please try again.');
+  const category = classifyRestoreError(error);
+  const phase: RestorePhase = operation.includes('initializeUserAccount')
+    ? 'account_reads'
+    : operation.includes('loadDayHistory') ? 'history_cloud' : 'account_reads';
+  logRestoreFailure(phase, error);
+  const message = category === 'permission-denied'
+    ? 'Cloud access was denied. Check the account permissions and try again.'
+    : category === 'unauthenticated'
+      ? 'Your sign-in expired. Sign in again to restore account data.'
+      : category === 'unavailable'
+        ? 'Cloud data is temporarily unavailable. Check your connection and retry.'
+        : 'Cloud data could not be loaded. Retry to continue.';
+  return new AccountRestoreError(phase, category, message, error);
 }
 
 /**
@@ -162,8 +225,8 @@ export function handleAuthError(error: unknown): AppAuthError {
   const errMessage = error instanceof Error ? error.message : String(error);
   const currentHostname = typeof window !== 'undefined' ? window.location.hostname : '';
 
-  if (import.meta.env.DEV) {
-    console.warn('[DAILY OS Auth Debug]', { code: errCode, message: errMessage, hostname: currentHostname });
+  if (viteEnv.DEV) {
+    console.warn('[DAILY OS Auth Debug]', { code: errCode, hostname: currentHostname });
   }
 
   switch (errCode) {
@@ -260,34 +323,34 @@ function sanitizeAuthDomain(rawDomain: string | undefined, projectId: string): s
  */
 function detectFirebaseConfig(): FirebaseConfig | null {
   const apiKey =
-    import.meta.env.VITE_FIREBASE_API_KEY ||
+    viteEnv.VITE_FIREBASE_API_KEY ||
     (typeof window !== 'undefined' && (window as unknown as { __ENV__?: Record<string, string> }).__ENV__?.VITE_FIREBASE_API_KEY);
 
   const projectId =
-    import.meta.env.VITE_FIREBASE_PROJECT_ID ||
+    viteEnv.VITE_FIREBASE_PROJECT_ID ||
     (typeof window !== 'undefined' && (window as unknown as { __ENV__?: Record<string, string> }).__ENV__?.VITE_FIREBASE_PROJECT_ID);
 
   if (apiKey && projectId) {
     const rawAuthDomain =
-      import.meta.env.VITE_FIREBASE_AUTH_DOMAIN ||
+      viteEnv.VITE_FIREBASE_AUTH_DOMAIN ||
       (typeof window !== 'undefined' && (window as unknown as { __ENV__?: Record<string, string> }).__ENV__?.VITE_FIREBASE_AUTH_DOMAIN);
 
     const authDomain = sanitizeAuthDomain(rawAuthDomain, projectId);
 
     const storageBucket =
-      import.meta.env.VITE_FIREBASE_STORAGE_BUCKET ||
+      viteEnv.VITE_FIREBASE_STORAGE_BUCKET ||
       (typeof window !== 'undefined' && (window as unknown as { __ENV__?: Record<string, string> }).__ENV__?.VITE_FIREBASE_STORAGE_BUCKET);
 
     const messagingSenderId =
-      import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID ||
+      viteEnv.VITE_FIREBASE_MESSAGING_SENDER_ID ||
       (typeof window !== 'undefined' && (window as unknown as { __ENV__?: Record<string, string> }).__ENV__?.VITE_FIREBASE_MESSAGING_SENDER_ID);
 
     const appId =
-      import.meta.env.VITE_FIREBASE_APP_ID ||
+      viteEnv.VITE_FIREBASE_APP_ID ||
       (typeof window !== 'undefined' && (window as unknown as { __ENV__?: Record<string, string> }).__ENV__?.VITE_FIREBASE_APP_ID);
 
     const recaptchaEnterpriseSiteKey =
-      import.meta.env.VITE_FIREBASE_RECAPTCHA_ENTERPRISE_SITE_KEY ||
+      viteEnv.VITE_FIREBASE_RECAPTCHA_ENTERPRISE_SITE_KEY ||
       (typeof window !== 'undefined' && (window as unknown as { __ENV__?: Record<string, string> }).__ENV__?.VITE_FIREBASE_RECAPTCHA_ENTERPRISE_SITE_KEY);
 
     return {
@@ -314,12 +377,12 @@ if (config && config.apiKey && config.projectId) {
 
     // Optional Firebase App Check Initialization
     if (typeof window !== 'undefined') {
-      if (import.meta.env.DEV && typeof self !== 'undefined') {
+      if (viteEnv.DEV && typeof self !== 'undefined') {
         // Support debug token in local development
         (self as unknown as { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean }).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
       }
 
-      if (config.recaptchaEnterpriseSiteKey || import.meta.env.DEV) {
+      if (config.recaptchaEnterpriseSiteKey || viteEnv.DEV) {
         appCheckInitialization = import('firebase/app-check').then(({ initializeAppCheck, ReCaptchaEnterpriseProvider }) => {
           appCheckInstance = initializeAppCheck(firebaseApp!, {
             // Debug mode intercepts provider requests in development, so a site key
@@ -443,7 +506,7 @@ export async function signInWithGoogle(): Promise<AuthUser> {
   if (!authInstance) {
     const errorMsg =
       'Firebase is not yet configured with your project credentials. Please configure VITE_FIREBASE_API_KEY and VITE_FIREBASE_PROJECT_ID in your environment (.env file).';
-    if (import.meta.env.DEV) {
+    if (viteEnv.DEV) {
       console.warn('[DAILY OS]', errorMsg);
     }
     throw new Error(errorMsg);
@@ -555,6 +618,33 @@ function parseOnboardingProgress(value: unknown): OnboardingProgress {
   };
 }
 
+function isValidStoredProfile(value: unknown, uid: string): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const profile = value as Record<string, unknown>;
+  const allowedKeys = ['uid', 'email', 'displayName', 'photoURL', 'createdAt', 'updatedAt'];
+  return Object.keys(profile).every((key) => allowedKeys.includes(key))
+    && (profile.uid === undefined || profile.uid === uid)
+    && (profile.email === undefined || (typeof profile.email === 'string' && profile.email.length <= 256))
+    && (profile.displayName === undefined || (typeof profile.displayName === 'string' && profile.displayName.length <= 128))
+    && (profile.photoURL === undefined || (typeof profile.photoURL === 'string' && profile.photoURL.length <= 1024))
+    && (profile.createdAt === undefined || (typeof profile.createdAt === 'string' && profile.createdAt.length <= 64))
+    && (profile.updatedAt === undefined || (typeof profile.updatedAt === 'string' && profile.updatedAt.length <= 64));
+}
+
+function parseRestoredSettings(value: unknown): UserSettings {
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) as UserSettings : value as UserSettings;
+    return normalizeUserSettings(parsed);
+  } catch (error) {
+    throw new AccountRestoreError(
+      'account_integrity',
+      'data-invalid',
+      'Saved account settings are invalid and need attention before this account can be restored.',
+      error
+    );
+  }
+}
+
 /**
  * Initializes the authenticated account without overwriting existing profile or onboarding data.
  * Legacy accounts with a profile, settings, or day record are treated as already onboarded.
@@ -564,12 +654,19 @@ export async function initializeUserAccount(user: AuthUser): Promise<Initialized
     throw new Error('Cloud account initialization is unavailable because Firebase is not configured.');
   }
   await appCheckInitialization;
+  return initializeUserAccountForDatabase(user, firestoreInstance);
+}
 
-  const profileRef = doc(firestoreInstance, 'users', user.uid);
-  const deletionTombstoneRef = doc(firestoreInstance, 'accountDeletionTombstones', user.uid);
-  const settingsRef = doc(firestoreInstance, 'users', user.uid, 'settings', 'main');
-  const onboardingRef = doc(firestoreInstance, 'users', user.uid, 'onboarding', 'main');
-  const daysQuery = query(collection(firestoreInstance, 'users', user.uid, 'days'), limit(1));
+/** Production initialization workflow with an explicit Firestore instance for emulator coverage. */
+export async function initializeUserAccountForDatabase(
+  user: AuthUser,
+  database: Firestore
+): Promise<InitializedUserAccount> {
+  const profileRef = doc(database, 'users', user.uid);
+  const deletionTombstoneRef = doc(database, 'accountDeletionTombstones', user.uid);
+  const settingsRef = doc(database, 'users', user.uid, 'settings', 'main');
+  const onboardingRef = doc(database, 'users', user.uid, 'onboarding', 'main');
+  const daysQuery = query(collection(database, 'users', user.uid, 'days'), limit(1));
 
   let profileSnapshot;
   let deletionTombstoneSnapshot;
@@ -583,19 +680,47 @@ export async function initializeUserAccount(user: AuthUser): Promise<Initialized
       getDocs(daysQuery),
     ]);
   } catch (err) {
-    throw handleFirestoreError('initializeUserAccount', err);
+    const category = classifyRestoreError(err);
+    logRestoreFailure('account_reads', err);
+    throw new AccountRestoreError('account_reads', category, category === 'permission-denied'
+      ? 'Cloud access was denied while checking this account.'
+      : category === 'unavailable'
+        ? 'Cloud account data is temporarily unavailable. Check your connection and retry.'
+        : 'Account data could not be checked. Retry to continue.', err);
   }
 
   if (deletionTombstoneSnapshot.exists() || (profileSnapshot.exists() && profileSnapshot.data().deletionInProgress === true)) {
     throw new AccountDeletionError('Account deletion is incomplete. Resume deletion to continue.');
   }
+  if (profileSnapshot.exists() && !isValidStoredProfile(profileSnapshot.data(), user.uid)) {
+    const error = new AccountRestoreError(
+      'account_integrity',
+      'data-invalid',
+      'Saved account profile data is invalid and needs attention before this account can be restored.'
+    );
+    logRestoreFailure('account_integrity', error);
+    throw error;
+  }
+
+  let cachedSettingsRaw: string | null = null;
+  let pendingSettings = false;
+  try {
+    if (typeof localStorage !== 'undefined') {
+      cachedSettingsRaw = localStorage.getItem(`daily_os_settings_${user.uid}`);
+      pendingSettings = localStorage.getItem(`daily_os_settings_pending_${user.uid}`) === 'true';
+    }
+  } catch (error) {
+    logRestoreFailure('account_integrity', error);
+  }
+  const cachedSettings = cachedSettingsRaw ? parseRestoredSettings(cachedSettingsRaw) : null;
+  const cloudSettings = settingsSnapshot.exists() ? parseRestoredSettings(settingsSnapshot.data()) : null;
 
   const hasLegacyAccountData =
     profileSnapshot.exists() || settingsSnapshot.exists() || !existingDays.empty;
   const now = new Date().toISOString();
   let onboarding: OnboardingProgress;
   try {
-    onboarding = await runTransaction(firestoreInstance, async (transaction) => {
+    onboarding = await runTransaction(database, async (transaction) => {
       const current = await transaction.get(onboardingRef);
       if (current.exists()) return parseOnboardingProgress(current.data());
 
@@ -604,6 +729,23 @@ export async function initializeUserAccount(user: AuthUser): Promise<Initialized
       return initial;
     });
 
+  } catch (err) {
+    const invalidData = err instanceof Error && err.message.includes('onboarding status is invalid');
+    const category = invalidData ? 'data-invalid' : classifyRestoreError(err);
+    logRestoreFailure(invalidData ? 'account_integrity' : 'onboarding_transaction', err);
+    throw new AccountRestoreError(
+      invalidData ? 'account_integrity' : 'onboarding_transaction',
+      category,
+      invalidData
+        ? 'Saved onboarding data is invalid and needs attention before this account can be restored.'
+        : category === 'permission-denied'
+          ? 'Cloud access was denied while initializing onboarding.'
+          : 'Onboarding could not be initialized. Retry to continue.',
+      err
+    );
+  }
+
+  try {
     await setDoc(
       profileRef,
       {
@@ -617,27 +759,27 @@ export async function initializeUserAccount(user: AuthUser): Promise<Initialized
       { merge: true }
     );
 
-    const cachedSettings = localStorage.getItem(`daily_os_settings_${user.uid}`);
-    const pendingSettingsKey = `daily_os_settings_pending_${user.uid}`;
-    if (cachedSettings && localStorage.getItem(pendingSettingsKey) === 'true') {
-      const settings = normalizeUserSettings(JSON.parse(cachedSettings) as UserSettings);
-      await saveUserSettings(user.uid, settings);
-      return { onboarding, settings };
+    if (cachedSettings && pendingSettings) {
+      await saveUserSettings(user.uid, cachedSettings);
+      return { onboarding, settings: cachedSettings };
     }
 
-    if (settingsSnapshot.exists()) {
-      const settings = normalizeUserSettings(settingsSnapshot.data() as UserSettings);
-      localStorage.setItem(`daily_os_settings_${user.uid}`, JSON.stringify(settings));
-      return { onboarding, settings };
+    if (cloudSettings) {
+      if (typeof localStorage !== 'undefined') localStorage.setItem(`daily_os_settings_${user.uid}`, JSON.stringify(cloudSettings));
+      return { onboarding, settings: cloudSettings };
     }
 
     return {
       onboarding,
-      settings: cachedSettings ? normalizeUserSettings(JSON.parse(cachedSettings) as UserSettings) : null,
+      settings: cachedSettings,
     };
   } catch (err) {
-    if (err instanceof Error && err.message.includes('onboarding status is invalid')) throw err;
-    throw handleFirestoreError('initializeUserAccount', err);
+    if (err instanceof AccountRestoreError) throw err;
+    const category = classifyRestoreError(err);
+    logRestoreFailure('profile_write', err);
+    throw new AccountRestoreError('profile_write', category, category === 'permission-denied'
+      ? 'Cloud access was denied while saving the account profile.'
+      : 'The account profile could not be saved. Retry to continue.', err);
   }
 }
 
@@ -843,11 +985,18 @@ export async function loadDayRecord(
 ): Promise<DayRecord> {
   // If user is authenticated, query Cloud Firestore
   if (uid && firestoreInstance) {
+    let cloudRecord: DayRecord | null = null;
     try {
       const dayDocRef = doc(firestoreInstance, 'users', uid, 'days', dateStr);
       const snapshot = await getDoc(dayDocRef);
       if (snapshot.exists()) {
-        const cloudRecord = normalizeCloudDayRecord(snapshot.data() as DayRecord);
+        cloudRecord = normalizeCloudDayRecord(snapshot.data() as DayRecord);
+      }
+    } catch (err) {
+      throw handleFirestoreError('loadDayRecord', err);
+    }
+    if (cloudRecord) {
+      try {
         const operations = await indexedDbDayOutbox.list(uid);
         const record = reconcileDayRecordWithMutations(
           cloudRecord,
@@ -855,19 +1004,26 @@ export async function loadDayRecord(
         );
         cacheUserDay(uid, record);
         return record;
+      } catch (error) {
+        logRestoreFailure('outbox_read', error);
+        // Do not overwrite local cache when pending edits cannot be inspected.
+        return cloudRecord;
       }
-    } catch (err) {
-      throw handleFirestoreError('loadDayRecord', err);
     }
   }
 
   const record = loadDayRecordFromStorage(uid, dateStr, settings);
   if (uid) {
-    const operations = await indexedDbDayOutbox.list(uid);
-    return reconcileDayRecordWithMutations(
-      record,
-      operations.filter((operation) => operation.date === dateStr)
-    );
+    try {
+      const operations = await indexedDbDayOutbox.list(uid);
+      return reconcileDayRecordWithMutations(
+        record,
+        operations.filter((operation) => operation.date === dateStr)
+      );
+    } catch (error) {
+      logRestoreFailure('outbox_read', error);
+      return record;
+    }
   }
   return record;
 }
@@ -1116,17 +1272,27 @@ export async function loadDayHistoryPage(
   if (!uid) throw new Error('Authentication is required to load cloud history.');
 
   const cachedDays = getAllUserCachedDays(uid);
-  const pendingOperations = await indexedDbDayOutbox.list(uid);
+  let pendingOperations: DayMutation[] | null = null;
+  try {
+    pendingOperations = await indexedDbDayOutbox.list(uid);
+  } catch (error) {
+    logRestoreFailure('outbox_read', error);
+  }
   const readCachePage = (): DayHistoryPage => {
-    const localRecords = overlayDayOperations(cachedDays, pendingOperations);
-    return createCachedDayHistoryPage(localRecords, {
-      pageSize,
-      beforeDate: options.beforeDate,
-      localCursor: options.localBeforeDate,
-      cloudCursor: options.beforeDate,
-      fromDate: options.fromDate,
-      throughDate: options.throughDate,
-    });
+    const localRecords = pendingOperations
+      ? overlayDayOperations(cachedDays, pendingOperations)
+      : cachedDays;
+    return {
+      ...createCachedDayHistoryPage(localRecords, {
+        pageSize,
+        beforeDate: options.beforeDate,
+        localCursor: options.localBeforeDate,
+        cloudCursor: options.beforeDate,
+        fromDate: options.fromDate,
+        throughDate: options.throughDate,
+      }),
+      outboxAvailable: pendingOperations !== null,
+    };
   };
 
   if (!firestoreInstance) return readCachePage();
@@ -1143,6 +1309,22 @@ export async function loadDayHistoryPage(
     snapshot.forEach((document) => {
       cloudRecords[document.id] = normalizeCloudDayRecord(document.data() as DayRecord);
     });
+
+    if (!pendingOperations) {
+      // Without the outbox, queued edits and recovery decisions are unknown.
+      // Show cloud history but do not enqueue recovery writes or replace cache.
+      const records = mergeDayRecords(cachedDays, cloudRecords);
+      const complete = snapshot.size < pageSize;
+      return {
+        records,
+        nextCursor: complete ? null : snapshot.docs[snapshot.docs.length - 1]?.id ?? null,
+        nextLocalCursor: null,
+        hasMore: !complete,
+        complete,
+        source: 'firestore',
+        outboxAvailable: false,
+      };
+    }
 
     const oldestCloudDate = snapshot.docs[snapshot.docs.length - 1]?.id;
     const cachePage = Object.fromEntries(

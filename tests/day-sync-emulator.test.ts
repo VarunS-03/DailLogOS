@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { initializeTestEnvironment, RulesTestEnvironment } from '@firebase/rules-unit-testing';
 import { deleteDoc, doc, Firestore, getDoc, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 import { DEFAULT_SETTINGS, createDefaultDayRecord } from '../src/constants/templates';
+import { initializeUserAccountForDatabase, AccountDeletionError, AccountRestoreError } from '../src/firebase';
 import {
   closeDayOutboxDatabase,
   createDayMutation,
@@ -55,6 +56,68 @@ async function main() {
 
   try {
     await environment.clearFirestore();
+    const freshUid = 'fresh-account';
+    const freshDatabase = typedFirestore(environment, freshUid);
+    const freshUser = { uid: freshUid, email: 'new-user@example.test', displayName: 'New User', photoURL: null };
+    assert.equal((await getDoc(doc(freshDatabase, 'users', freshUid))).exists(), false);
+    assert.equal((await getDoc(doc(freshDatabase, 'users', freshUid, 'settings', 'main'))).exists(), false);
+    assert.equal((await getDoc(doc(freshDatabase, 'users', freshUid, 'onboarding', 'main'))).exists(), false);
+    const initializedFresh = await initializeUserAccountForDatabase(freshUser, freshDatabase);
+    assert.equal(initializedFresh.onboarding.status, 'not_started');
+    assert.equal(initializedFresh.onboarding.currentStage, 1);
+    assert.equal((await getDoc(doc(freshDatabase, 'users', freshUid))).exists(), true);
+    assert.equal((await getDoc(doc(freshDatabase, 'users', freshUid, 'settings', 'main'))).exists(), false);
+    assert.equal((await getDoc(doc(freshDatabase, 'users', freshUid, 'days', '2026-10-11'))).exists(), false);
+
+    await updateDoc(doc(freshDatabase, 'users', freshUid, 'onboarding', 'main'), {
+      status: 'in_progress', currentStage: 3, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    });
+    await setDoc(doc(freshDatabase, 'users', freshUid, 'settings', 'main'), DEFAULT_SETTINGS);
+    await seedRecord(environment, freshUid, createDefaultDayRecord('2026-10-11', DEFAULT_SETTINGS));
+    const initializedReturning = await initializeUserAccountForDatabase(freshUser, freshDatabase);
+    assert.equal(initializedReturning.onboarding.status, 'in_progress', 'returning initialization preserves lifecycle status');
+    assert.equal(initializedReturning.onboarding.currentStage, 3, 'returning initialization preserves onboarding stage');
+    assert.equal(initializedReturning.settings?.theme, DEFAULT_SETTINGS.theme);
+    assert.equal((await getDoc(doc(freshDatabase, 'users', freshUid, 'days', '2026-10-11'))).exists(), true);
+
+    const tombstonedUid = 'tombstoned-account';
+    const tombstonedDatabase = typedFirestore(environment, tombstonedUid);
+    await setDoc(doc(tombstonedDatabase, 'accountDeletionTombstones', tombstonedUid), {
+      status: 'pending', startedAt: serverTimestamp(),
+    });
+    await assert.rejects(
+      initializeUserAccountForDatabase({ ...freshUser, uid: tombstonedUid }, tombstonedDatabase),
+      AccountDeletionError,
+    );
+    assert.equal((await getDoc(doc(tombstonedDatabase, 'users', tombstonedUid))).exists(), false);
+    await assert.rejects(getDoc(doc(typedFirestore(environment, 'not-owner'), 'users', freshUid)));
+    await assert.rejects(
+      initializeUserAccountForDatabase(freshUser, typedFirestore(environment, 'different-owner')),
+      (error: unknown) => error instanceof AccountRestoreError && error.phase === 'account_reads' && error.category === 'permission-denied',
+    );
+    const malformedUid = 'malformed-account';
+    const malformedDatabase = typedFirestore(environment, malformedUid);
+    await environment.withSecurityRulesDisabled(async (context) => {
+      await context.firestore().collection('users').doc(malformedUid).set({ uid: malformedUid, unexpectedPrivateField: true });
+    });
+    await assert.rejects(
+      initializeUserAccountForDatabase({ ...freshUser, uid: malformedUid }, malformedDatabase),
+      (error: unknown) => error instanceof AccountRestoreError && error.phase === 'account_integrity' && error.category === 'data-invalid',
+    );
+    const malformedSettingsUid = 'malformed-settings';
+    const malformedSettingsDatabase = typedFirestore(environment, malformedSettingsUid);
+    await environment.withSecurityRulesDisabled(async (context) => {
+      const account = context.firestore().collection('users').doc(malformedSettingsUid);
+      await account.set({ uid: malformedSettingsUid });
+      await account.collection('settings').doc('main').set({ systemConfiguration: { invalid: true } });
+    });
+    await assert.rejects(
+      initializeUserAccountForDatabase({ ...freshUser, uid: malformedSettingsUid }, malformedSettingsDatabase),
+      (error: unknown) => error instanceof AccountRestoreError && error.phase === 'account_integrity' && error.category === 'data-invalid',
+    );
+    assert.equal((await getDoc(doc(malformedSettingsDatabase, 'users', malformedSettingsUid, 'onboarding', 'main'))).exists(), false);
+    console.log('PASS (Firestore Emulator): Production account initialization provisions new users, preserves returning state, enforces owner access, and blocks tombstones.');
+
     const uid = 'sync-user';
     const database = typedFirestore(environment, uid);
     const accountRef = doc(database, 'users', uid);

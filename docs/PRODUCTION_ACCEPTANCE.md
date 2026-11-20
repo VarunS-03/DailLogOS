@@ -107,3 +107,8 @@ This addendum supersedes earlier statements above that Insights startup loads al
 | Live AI response / production App Check | NOT RUN; Console registration and site-key configuration remain external release gates |
 
 The Firestore Emulator's negative assertions intentionally emit permission-denied logs. The emulator runner shut down successfully. A zero-byte emulator debug log was removed.
+# Account restore remediation note (2026-11-20)
+
+The Firestore Emulator exposed and verified a rules defect in the account startup query: owner day-collection `list` requests were denied when `dateId` was unbound for the query. The rules now permit listing only inside the authenticated owner's day path, while direct day reads and writes keep date validation. The production `initializeUserAccountForDatabase` path now has emulator coverage for new/returning users, permission denial, tombstones, and malformed account data.
+
+Outbox failure now degrades local synchronization visibly instead of blocking account readiness. Day edits and the sync worker remain paused until the outbox can be inspected. These local checks do not establish that the changed rules are deployed or that production Google OAuth/App Check configuration is correct. Manual browser/device and live-project acceptance is still required before release.

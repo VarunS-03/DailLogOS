@@ -13,6 +13,7 @@ import {
   SyncStatus,
 } from './types';
 import { diffDayRecord, indexedDbDayOutbox, DayMutation, subscribeToDayOutbox } from './services/dayOutbox';
+import { readOutboxSafely } from './services/outboxAccess';
 import {
   processDayOutbox,
   reconcileDayRecordWithMutations,
@@ -25,6 +26,8 @@ import {
   signInWithGoogle,
   signOutUser,
   AccountDeletionError,
+  AccountRestoreError,
+  logRestoreFailure,
   loadDayRecord,
   loadAllDays,
   loadDayHistoryPage,
@@ -144,6 +147,7 @@ function getSyncStatusLabel(status: SyncStatus, isAuthenticated: boolean): strin
     conflict: 'Conflict needs review',
     synced: 'Cloud synced',
     error: 'Sync failed',
+    unavailable: 'Local sync storage unavailable',
   };
   return labels[status];
 }
@@ -231,6 +235,7 @@ export default function App() {
 
   // Sync state
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
+  const [outboxUnavailableUid, setOutboxUnavailableUid] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncConflict, setSyncConflict] = useState<DayMutation | null>(null);
   const [syncRecovery, setSyncRecovery] = useState<DayMutation | null>(null);
@@ -269,8 +274,9 @@ export default function App() {
       clearAuthTimeout();
       if (!active) return;
       setAuthRestoreError(null);
-      setUser(authUser);
+      setUser((previous) => previous?.uid === authUser?.uid ? previous : authUser);
       setAuthResolved(true);
+      setOutboxUnavailableUid(null);
       setAccountReady(authUser === null);
       setAccountUserId(null);
       if (!authUser) {
@@ -295,10 +301,7 @@ export default function App() {
       }
     }, (error) => {
       clearAuthTimeout();
-      console.error(
-        'Firebase authentication state could not be restored:',
-        error instanceof Error ? error.name : 'AuthStateError'
-      );
+      logRestoreFailure('auth_state', error);
       if (active) setAuthRestoreError('Sign-in state could not be restored. Retry or check your connection and browser storage.');
     });
     return () => {
@@ -354,6 +357,8 @@ export default function App() {
     setHistoryLoadError(null);
     setSyncConflict(null);
     setSyncRecovery(null);
+    setOutboxUnavailableUid(null);
+    setSyncError(null);
     setSettings(DEFAULT_SETTINGS);
     updateCurrentDay(createDefaultDayRecord(getLocalDateId(), DEFAULT_SETTINGS));
     setYesterdayRecord(null);
@@ -370,7 +375,10 @@ export default function App() {
         setOnboardingStage(Math.max(3, Math.min(6, useGuestDraft ? guestDraft.currentStage : account.onboarding.currentStage)));
         if (account.settings) setSettings(account.settings);
         const history = await loadDayHistoryPage(user.uid, { pageSize: DEFAULT_HISTORY_PAGE_SIZE });
-        const queuedOperations = await indexedDbDayOutbox.list(user.uid);
+        const outboxResult = history.outboxAvailable === false
+          ? { available: false as const, operations: null, error: new Error('Local sync storage is unavailable.') }
+          : await readOutboxSafely(indexedDbDayOutbox, user.uid);
+        const queuedOperations = outboxResult.available ? outboxResult.operations : [];
         if (!active) return;
         setAllDays(history.records);
         setHistoryComplete(history.complete);
@@ -380,12 +388,24 @@ export default function App() {
         setHistoryLoadError(null);
         setSyncConflict(queuedOperations.find((operation) => operation.status === 'conflict') ?? null);
         setSyncRecovery(queuedOperations.find((operation) => operation.status === 'recovery') ?? null);
-        setSyncStatus(getOutboxSyncStatus(queuedOperations));
+        if (outboxResult.available) {
+          setOutboxUnavailableUid(null);
+          setSyncStatus(getOutboxSyncStatus(queuedOperations));
+          setSyncError(null);
+        } else {
+          logRestoreFailure('outbox_read', 'error' in outboxResult ? outboxResult.error : null);
+          setOutboxUnavailableUid(user.uid);
+          setSyncStatus('unavailable');
+          setSyncError('Local sync storage is unavailable. Cloud history loaded, but queued local edits cannot be checked. Restore browser storage and retry before editing day records.');
+        }
         setAccountUserId(user.uid);
         setAccountReady(true);
       })
       .catch((err: unknown) => {
-        console.error('Account initialization failed:', err);
+        const restorePhase = err instanceof AccountRestoreError
+          ? err.phase
+          : err instanceof AccountDeletionError ? 'account_integrity' : 'account_reads';
+        logRestoreFailure(restorePhase, err);
         if (!active) return;
         if (err instanceof AccountDeletionError) {
           setAccountDeletionPending(true);
@@ -422,14 +442,13 @@ export default function App() {
 
     async function fetchDays() {
       if (!authResolved || (user && (!accountReady || accountUserId !== user.uid))) return;
-      setSyncStatus('syncing');
+      if (!user || outboxUnavailableUid !== user.uid) setSyncStatus('syncing');
       try {
-        const [loadedRecord, queuedOperations] = user
-          ? await Promise.all([
-            loadDayRecord(user.uid, selectedDate, settings),
-            indexedDbDayOutbox.list(user.uid),
-          ])
-          : [await loadDayRecord(null, selectedDate, settings), [] as DayMutation[]];
+        const loadedRecord = await loadDayRecord(user?.uid ?? null, selectedDate, settings);
+        const outboxResult = user
+          ? await readOutboxSafely(indexedDbDayOutbox, user.uid)
+          : { available: true as const, operations: [] as DayMutation[] };
+        const queuedOperations = outboxResult.available ? outboxResult.operations : [];
         const record = user
           ? reconcileDayRecordWithMutations(
             loadedRecord,
@@ -449,15 +468,23 @@ export default function App() {
           updateCurrentDay(record);
           setYesterdayRecord(yRec);
           setAllDays((prev) => ({ ...prev, [selectedDate]: record }));
-          setSyncConflict(queuedOperations.find((operation) => operation.status === 'conflict') ?? null);
-          setSyncRecovery(queuedOperations.find((operation) => operation.status === 'recovery') ?? null);
-          setSyncStatus(user ? getOutboxSyncStatus(queuedOperations) : 'synced');
+          if (outboxResult.available) {
+            setOutboxUnavailableUid(null);
+            setSyncConflict(queuedOperations.find((operation) => operation.status === 'conflict') ?? null);
+            setSyncRecovery(queuedOperations.find((operation) => operation.status === 'recovery') ?? null);
+            setSyncStatus(user ? getOutboxSyncStatus(queuedOperations) : 'synced');
+            if (outboxUnavailableUid === user?.uid) setSyncError(null);
+          } else {
+            setOutboxUnavailableUid(user?.uid ?? null);
+            setSyncStatus('unavailable');
+            setSyncError('Local sync storage is unavailable. Day records are read-only until queued edits can be checked.');
+          }
         }
       } catch (err) {
         console.error('Failed to load day record:', err);
         if (isMounted) {
-          setSyncStatus('idle');
-          setAccountError(err instanceof Error ? err.message : 'Day data could not be loaded.');
+          setSyncStatus(outboxUnavailableUid === user?.uid ? 'unavailable' : 'idle');
+          if (outboxUnavailableUid !== user?.uid) setAccountError(err instanceof Error ? err.message : 'Day data could not be loaded.');
         }
       }
     }
@@ -465,7 +492,7 @@ export default function App() {
     fetchDays();
 
     let unsubSnapshot: (() => void) | null = null;
-    if (user && isFirebaseConfigured) {
+    if (user && isFirebaseConfigured && outboxUnavailableUid !== user.uid) {
       unsubSnapshot = subscribeToDayRecord(user.uid, selectedDate, (updated) => {
         if (!isMounted) return;
         if (!updated) {
@@ -518,10 +545,10 @@ export default function App() {
       isMounted = false;
       if (unsubSnapshot) unsubSnapshot();
     };
-  }, [selectedDate, user, settings, authResolved, accountReady, accountUserId]);
+  }, [selectedDate, user, settings, authResolved, accountReady, accountUserId, outboxUnavailableUid]);
 
   useEffect(() => {
-    if (!user || !authResolved || !accountReady || accountUserId !== user.uid) return;
+    if (!user || !authResolved || !accountReady || accountUserId !== user.uid || outboxUnavailableUid === user.uid) return;
     const uid = user.uid;
     let active = true;
     let running = false;
@@ -530,7 +557,7 @@ export default function App() {
     setSyncError(null);
 
     const run = async () => {
-      if (!active || running) return;
+      if (!active || running || user?.uid !== uid || outboxUnavailableUid === uid) return;
       if (retryTimer) {
         clearTimeout(retryTimer);
         retryTimer = null;
@@ -611,7 +638,7 @@ export default function App() {
       void stop();
       if (syncWorkerRef.current?.uid === uid) syncWorkerRef.current = null;
     };
-  }, [user?.uid, authResolved, accountReady, accountUserId]);
+  }, [user?.uid, authResolved, accountReady, accountUserId, outboxUnavailableUid]);
 
   const handleLoadOlderHistory = useCallback(async () => {
     if (historyLoadingMore) return;
@@ -658,6 +685,12 @@ export default function App() {
 
   const handleUpdateDay = useCallback(
     async (updatedDay: DayRecord, baseDay?: DayRecord): Promise<void> => {
+      if (user && outboxUnavailableUid === user.uid) {
+        const message = 'Day editing is paused because local sync storage is unavailable. Restore browser storage and retry so pending edits and conflicts can be checked safely.';
+        setSyncStatus('unavailable');
+        setSyncError(message);
+        throw new Error(message);
+      }
       const base = baseDay ?? currentDayRef.current;
       if (base.date !== updatedDay.date) {
         throw new Error('A day change cannot move data between dates.');
@@ -691,7 +724,7 @@ export default function App() {
         throw error;
       }
     },
-    [user, updateCurrentDay]
+    [user, outboxUnavailableUid, updateCurrentDay]
   );
 
   const persistSettings = async (newSettings: UserSettings) => {
@@ -789,7 +822,7 @@ export default function App() {
     setIsSigningIn(true);
     try {
       const authUser = await signInWithGoogle();
-      setUser(authUser);
+      setUser((previous) => previous?.uid === authUser.uid ? previous : authUser);
     } catch (err: unknown) {
       if (err instanceof AppAuthError) setAuthError(err);
     } finally {
@@ -879,6 +912,11 @@ export default function App() {
 
   const handleRetryDaySync = async () => {
     if (!user) return;
+    if (outboxUnavailableUid === user.uid) {
+      setOutboxUnavailableUid(null);
+      setAccountRetryCount((count) => count + 1);
+      return;
+    }
     try {
       const operations = await indexedDbDayOutbox.list(user.uid);
       await Promise.all(operations.filter((operation) => operation.status === 'failed').map((operation) => (
@@ -947,6 +985,11 @@ export default function App() {
                     setAuthRetryCount((count) => count + 1);
                     return;
                   }
+                  if (user && (!accountReady || accountUserId !== user.uid)) {
+                    setAccountError(null);
+                    setAccountRetryCount((count) => count + 1);
+                    return;
+                  }
                   try {
                     if (user) await retryPendingUserSettings(user.uid);
                     await syncWorkerRef.current?.run();
@@ -986,7 +1029,7 @@ export default function App() {
               {getSyncStatusLabel(syncStatus, Boolean(user))}
             </div>
             {syncError && (
-              <div className="mx-auto mt-3 flex max-w-4xl items-center justify-between gap-3 rounded-xl border border-amber-400/30 bg-amber-950/30 px-4 py-2 text-xs text-amber-100" role="alert">
+            <div className={`mx-auto mt-3 flex max-w-4xl items-center justify-between gap-3 rounded-xl border px-4 py-2 text-xs ${syncStatus === 'unavailable' ? 'border-red-400/30 bg-red-950/30 text-red-100' : 'border-amber-400/30 bg-amber-950/30 text-amber-100'}`} role="alert">
                 <span>{syncError}</span>
                 {user && (
                   <button
@@ -1051,7 +1094,7 @@ export default function App() {
             )}
             {!authResolved || (user && (!accountReady || accountUserId !== user.uid)) ? (
               <div className="flex min-h-[50vh] items-center justify-center px-6 text-center text-zinc-300">
-                {accountError || authRestoreError ? 'Your account data could not be restored. Use Retry to try again.' : 'Checking your account…'}
+              {accountError || authRestoreError || 'Checking your account…'}
               </div>
             ) : (
               <>

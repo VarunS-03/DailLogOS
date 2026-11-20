@@ -163,7 +163,7 @@ export class FirestoreRulesEvaluator {
   // Global catch-all is false unless matched
   static evaluate(
     path: string,
-    operation: 'read' | 'create' | 'update' | 'delete',
+    operation: 'read' | 'create' | 'update' | 'delete' | 'list',
     context: SecurityContext,
     resourceData?: FirestoreDocument,
     requestData?: FirestoreDocument
@@ -299,6 +299,11 @@ export class FirestoreRulesEvaluator {
         }
         return { allowed: true };
       }
+    }
+
+    // Owner-scoped collection listing used by first-time account initialization.
+    if (segments.length === 3 && segments[2] === 'days' && operation === 'list') {
+      return { allowed: true, reason: 'OWNER_DAYS_LIST: restricted to owning UID path' };
     }
 
     // Path 3: /users/{uid}/days/{dateId}
@@ -453,6 +458,18 @@ function runSecurityTests() {
     '8. Cross-user settings write denied',
     false,
     FirestoreRulesEvaluator.evaluate('users/user_alice_123/settings/main', 'update', userB, undefined, { theme: 'light' })
+  );
+
+  // Test 9: Authenticated user CAN read/write their OWN day record
+  assertRule(
+    '8a. Owner can list their own day collection for account initialization',
+    true,
+    FirestoreRulesEvaluator.evaluate('users/user_alice_123/days', 'list', userA)
+  );
+  assertRule(
+    '8b. Another user cannot list the day collection',
+    false,
+    FirestoreRulesEvaluator.evaluate('users/user_alice_123/days', 'list', userB)
   );
 
   // Test 9: Authenticated user CAN read/write their OWN day record

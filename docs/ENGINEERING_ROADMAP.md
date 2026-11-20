@@ -1371,3 +1371,9 @@ If a critical acceptance criterion cannot be satisfied, stop at that phase, expl
 - Status: local engineering PASS WITH LIMITATIONS; release NOT READY pending external configuration, manual key rotation, and browser acceptance.
 - Read [docs/PHASE_17_RELEASE_READINESS.md](PHASE_17_RELEASE_READINESS.md) and [docs/BROWSER_ACCEPTANCE_CHECKLIST.md](BROWSER_ACCEPTANCE_CHECKLIST.md) for details.
 - Do not deploy frontend until the tombstone-capable `firestore.rules` are deployed to the intended project and App Check is configured/verified. No deployment or credential rotation was performed.
+# Account restore reliability follow-up (2026-11-20)
+
+- Fixed owner-scoped `/users/{uid}/days` collection listing in Firestore rules; date validation remains on direct document reads and writes. The emulator had shown empty day queries were denied because `dateId` is unbound for collection listing.
+- Decoupled authenticated dashboard readiness from IndexedDB outbox availability. When the outbox cannot be read, history may use cloud data without recovery/cache writes, sync is shown unavailable, and day edits and background sync are paused.
+- Added production account initialization coverage against the Firestore Emulator for new and returning users, permission denial, tombstones, and malformed profile/settings data.
+- Live Firebase rules/App Check configuration and real-browser storage behavior still require manual acceptance.

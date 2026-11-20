@@ -7,7 +7,7 @@
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
     "analyze:bundle": "node scripts/analyze-bundle.mjs",
-    "test": "node --test tests/emulator-runner.test.mjs && tsx tests/behavioral-contracts.test.ts && tsx tests/behavioral-services.test.ts && tsx tests/firestore.rules.test.ts && tsx tests/account-lifecycle.test.ts && tsx tests/account-deletion.test.ts && tsx tests/day-history.test.ts && tsx tests/onboarding-questionnaire.test.ts && tsx tests/requirements-interpreter.test.ts && tsx tests/app-customization.test.ts && tsx tests/ai-response-validation.test.ts && tsx tests/day-sync.test.ts && tsx tests/day-outbox-cross-tab.test.ts",
+    "test": "node --test tests/emulator-runner.test.mjs && tsx tests/behavioral-contracts.test.ts && tsx tests/behavioral-services.test.ts && tsx tests/firestore.rules.test.ts && tsx tests/account-lifecycle.test.ts && tsx tests/account-deletion.test.ts && tsx tests/day-history.test.ts && tsx tests/onboarding-questionnaire.test.ts && tsx tests/requirements-interpreter.test.ts && tsx tests/app-customization.test.ts && tsx tests/ai-response-validation.test.ts && tsx tests/day-sync.test.ts && tsx tests/day-outbox-cross-tab.test.ts && tsx tests/outbox-access.test.ts && tsx tests/restore-diagnostics.test.ts",
     "test:firestore-emulator": "node scripts/run-firestore-emulator.mjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",

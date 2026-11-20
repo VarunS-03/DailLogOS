@@ -11,6 +11,8 @@ export interface DayHistoryPage {
   hasMore: boolean;
   complete: boolean;
   source: DayHistorySource;
+  /** False when cloud history loaded but local pending edits could not be inspected. */
+  outboxAvailable?: boolean;
 }
 
 export interface DayHistoryPageOptions {

@@ -54,6 +54,7 @@ export const Navigation: React.FC<NavigationProps> = ({
     conflict: 'Conflict needs review',
     synced: user ? 'Cloud synced' : 'Saved on device',
     error: 'Sync failed',
+    unavailable: 'Local storage unavailable',
   };
   const syncStatusColor: Record<SyncStatus, string> = {
     idle: 'bg-zinc-500',
@@ -63,6 +64,7 @@ export const Navigation: React.FC<NavigationProps> = ({
     conflict: 'bg-red-400',
     synced: 'bg-emerald-400',
     error: 'bg-red-400',
+    unavailable: 'bg-red-400',
   };
   const trackModules: Array<SystemModuleId> = ['dsa', 'academics', 'workout', 'projects'];
   const firstEnabledTrackModule = trackModules.find((module) => enabledModules.includes(module));

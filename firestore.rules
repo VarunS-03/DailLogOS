@@ -393,7 +393,11 @@ service cloud.firestore {
 
       // User Daily Records Subcollection (/users/{uid}/days/{dateId})
       match /days/{dateId} {
-        allow read: if isOwner(uid) && isValidDateId(dateId);
+        // Collection queries evaluate at the collection path, where dateId is
+        // not bound to one document. Keep list access owner-scoped; validate
+        // the date ID on direct document reads and every write.
+        allow get: if isOwner(uid) && isValidDateId(dateId);
+        allow list: if isOwner(uid);
         allow create: if isOwner(uid) &&
           accountWritesAllowed(uid) &&
           isValidDateId(dateId) &&
